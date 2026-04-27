@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Dot Your Story, Live</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="map"></canvas>
+  <div id="writer" hidden>
+    <div class="writer-hd">
+      <span id="writer-loc">—</span>
+      <button id="writer-close" type="button" aria-label="close">×</button>
+    </div>
+    <input id="writer-name" type="text" placeholder="your name" maxlength="40" />
+    <input id="writer-spot" type="text" placeholder="what's this spot?" maxlength="60" />
+    <textarea id="writer-story" rows="4" placeholder="what happened here?" maxlength="500"></textarea>
+    <div id="camera-section">
+      <video id="camera-preview" autoplay playsinline muted></video>
+      <canvas id="camera-snap" width="80" height="80"></canvas>
+      <img id="camera-thumb" alt="" hidden />
+      <div id="camera-controls">
+        <button id="btn-capture" type="button">take photo</button>
+        <button id="btn-retake" type="button" hidden>retake</button>
+      </div>
+    </div>
+    <button id="writer-submit" type="button">leave it here</button>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="grid.js"></script>
+  <script type="module" src="app.js?v=11"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "whats-your-nyc-stories",
+  "version": "0.1.0",
+  "description": "Real-time, zoomable, collaborative canvas of NYC made of stories",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^0.0.5",
+    "@seald-io/nedb": "^4.1.2",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.1"
+  }
+}

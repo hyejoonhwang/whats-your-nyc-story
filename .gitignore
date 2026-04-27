@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+.env
+.env.local
+*.log
+npm-debug.log*
+
+# editors
+.vscode/
+.idea/
+
+# OS junk
+Thumbs.db
+
+# local data — comment out if you want to ship seed stories
+data/*.db
+data/*.db.~
