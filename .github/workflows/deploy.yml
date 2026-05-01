@@ -1,0 +1,25 @@
+name: Deploy to droplet
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /root/whats-your-nyc-story
+            git pull --ff-only
+            npm install --omit=dev
+            pm2 restart whats-your-nyc-story --update-env
+            pm2 save
+            echo "deployed at $(date -u)"
