@@ -1,4 +1,4 @@
-# What's Your NYC Stories?
+# What's Your NYC Story?
 
 A real-time, zoomable, collaborative canvas of New York City made of stories.
 
@@ -32,8 +32,8 @@ This project is an open-source extension of that ecosystem: a real-world stress 
 ## Getting Started
 
 ```bash
-git clone https://github.com/hyejoonhwang/whats-your-nyc-stories.git
-cd whats-your-nyc-stories
+git clone https://github.com/hyejoonhwang/whats-your-nyc-story.git
+cd whats-your-nyc-story
 npm install
 npm start
 ```

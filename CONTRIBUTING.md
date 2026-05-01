@@ -1,4 +1,4 @@
-# Contributing to What's Your NYC Stories?
+# Contributing to What's Your NYC Story?
 
 Thanks for your interest in this project! It started as a class project at NYU ITP, and I'd love for it to keep growing as more people add to it.
 
