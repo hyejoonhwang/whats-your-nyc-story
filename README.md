@@ -8,8 +8,6 @@ NYC is rendered as a vintage paper map. When you click a spot that holds your st
 
 Zoom out and the city is dotted with **3D ball-head pins** — one per story, color-coded, clustered around their spots. Zoom in and the pins fade into **paper post-its** with the actual stories typed on them, each pinned with its own ball-head, slightly tilted, casting drop shadows on the cream paper underneath. Click through stacked post-its with a small `1/n →` indicator. Drag any post-it freely (it snaps back to its real location on refresh).
 
-Built for NYU ITP's Live Web final — and submitted as the project for ITP's Open Source class.
-
 ## Built on Pretext
 
 The text layout inside every post-it uses Cheng Lou's [`@chenglou/pretext`](https://github.com/chenglou/pretext) — a canvas text layout library that makes per-zoom reflow fast enough that the post-its can keep growing as you zoom in, with the text rewrapping smoothly to fit each new size. Pretext is also what powers the live-drafting layer: as a peer types into their post-it, every other viewer sees the text being laid out letter-by-letter on the canvas in real time.
