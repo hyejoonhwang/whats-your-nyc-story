@@ -26,9 +26,19 @@
       </div>
     </div>
     <button id="writer-submit" type="button">leave it here</button>
+    <div id="writer-confirm" hidden>
+      <div class="writer-confirm-text">
+        close without saving?<br>
+        <span class="writer-confirm-sub">your story won't be saved.</span>
+      </div>
+      <div class="writer-confirm-buttons">
+        <button id="writer-confirm-no" type="button">cancel</button>
+        <button id="writer-confirm-yes" type="button">close</button>
+      </div>
+    </div>
   </div>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="grid.js"></script>
-  <script type="module" src="app.js?v=11"></script>
+  <script src="grid.js?v=4"></script>
+  <script type="module" src="app.js?v=49"></script>
 </body>
 </html>

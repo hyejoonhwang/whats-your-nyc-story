@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>NYC Vintage Paper Map · What's Your NYC Story?</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #1a1410; color: #f4ecd8; font: 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .hud { position: fixed; pointer-events: none; user-select: none; }
+  .hud.top { top: 12px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .hud.top a { pointer-events: auto; color: #ff5b3b; text-decoration: none; opacity: 0.85; }
+  .hud.bottom { bottom: 12px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-weight: 400; font-size: 16px; color: #f4ecd8; }
+  h1 .small { font-size: 11px; color: #a89576; font-style: normal; font-family: ui-monospace, monospace; margin-left: 8px; }
+  .layer-status { display: flex; gap: 14px; flex-wrap: wrap; opacity: 0.85; }
+  .layer-status .row { display: flex; gap: 6px; align-items: center; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #555; }
+  .dot.active { background: #ff5b3b; box-shadow: 0 0 6px rgba(255,91,59,0.6); }
+  .dot.loading { background: #f4ecd8; opacity: 0.4; }
+  .info-right { text-align: right; opacity: 0.7; font-feature-settings: "tnum"; }
+</style>
+</head>
+<body>
+
+<canvas id="map"></canvas>
+
+<div class="hud top">
+  <h1>New York City <span class="small">— pan + scroll to zoom</span></h1>
+  <a href="/">← back to app</a>
+</div>
+
+<div class="hud bottom">
+  <div class="layer-status" id="layer-status">
+    <div class="row" data-layer="boroughs"><span class="dot"></span>boroughs</div>
+    <div class="row" data-layer="parks"><span class="dot"></span>parks · 2x</div>
+    <div class="row" data-layer="nta"><span class="dot"></span>neighborhoods · 1.5x</div>
+    <div class="row" data-layer="streetsMajor"><span class="dot"></span>major streets · 3x</div>
+    <div class="row" data-layer="streetsAll"><span class="dot"></span>all streets · 6x</div>
+  </div>
+  <div class="info-right">
+    <span id="zoom-pct">100%</span> · <span id="loaded-count">0/5</span> layers
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// Constants & projection
+// =============================================================================
+const WEST = -74.27, EAST = -73.68, SOUTH = 40.48, NORTH = 40.92;
+const COS_LAT = Math.cos(((NORTH + SOUTH) / 2) * Math.PI / 180);
+const W_DEG = (EAST - WEST) * COS_LAT;
+const H_DEG = NORTH - SOUTH;
+const WORLD_SCALE = 1800 / Math.max(W_DEG, H_DEG);   // ~1° → 4200 world units
+const WORLD_W = W_DEG * WORLD_SCALE;
+const WORLD_H = H_DEG * WORLD_SCALE;
+
+function lonLatToWorld([lon, lat]) {
+  return [
+    (lon - WEST) * COS_LAT * WORLD_SCALE,
+    (NORTH - lat) * WORLD_SCALE,
+  ];
+}
+
+// Hand-picked label anchors for boroughs (geometric centroids land in water).
+const BOROUGH_LABELS = {
+  "Manhattan":     [-73.965, 40.789],
+  "Brooklyn":      [-73.950, 40.650],
+  "Queens":        [-73.815, 40.730],
+  "Bronx":         [-73.865, 40.853],
+  "Staten Island": [-74.135, 40.585],
+};
+const BOROUGH_FILLS = {
+  "Manhattan":     "#e8c896",
+  "Brooklyn":      "#cdd9a4",
+  "Queens":        "#dabd84",
+  "Bronx":         "#e0b094",
+  "Staten Island": "#c4c89a",
+};
+
+// =============================================================================
+// View transform (scale + translate, like the main app)
+// =============================================================================
+const view = { scale: 1, tx: 0, ty: 0 };
+const MIN_SCALE = 0.4, MAX_SCALE = 30;
+
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+let DPR = window.devicePixelRatio || 1;
+let cssW = 0, cssH = 0;
+
+function resize() {
+  cssW = window.innerWidth;
+  cssH = window.innerHeight;
+  DPR = window.devicePixelRatio || 1;
+  canvas.width = cssW * DPR;
+  canvas.height = cssH * DPR;
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+function fitToNYC() {
+  const fit = Math.min(cssW / WORLD_W, cssH / WORLD_H) * 0.9;
+  view.scale = fit;
+  view.tx = (cssW - WORLD_W * view.scale) / 2;
+  view.ty = (cssH - WORLD_H * view.scale) / 2;
+}
+
+// Internal "zoom level" — independent of CSS scale. zoomLevel=1 means
+// "view fits NYC", zoomLevel=2 means "twice as zoomed in", etc. Layer
+// thresholds are expressed in this space.
+function zoomLevel() {
+  const fit = Math.min(cssW / WORLD_W, cssH / WORLD_H) * 0.9;
+  return view.scale / fit;
+}
+
+// =============================================================================
+// Layer definitions + on-load preprocessing
+// =============================================================================
+const layers = {
+  boroughs:     { url: "/data/nyc-boroughs.geojson",      threshold: 0,    data: null },
+  nta:          { url: "/data/nyc-neighborhoods.geojson", threshold: 1.5,  data: null },
+  parks:        { url: "/data/nyc-parks.geojson",         threshold: 2.0,  data: null },
+  streetsMajor: { url: "/data/nyc-streets-major.geojson", threshold: 3.0,  data: null },
+  streetsAll:   { url: "/data/nyc-streets-all.geojson",   threshold: 6.0,  data: null },
+};
+
+let loadedCount = 0;
+function setLayerStatus(name, state) {
+  const el = document.querySelector(`.layer-status .row[data-layer="${name}"] .dot`);
+  if (!el) return;
+  el.classList.remove("active", "loading");
+  if (state) el.classList.add(state);
+}
+
+// Walk every coordinate in the geometry and convert to world coords; also
+// compute a bbox for fast culling at render time.
+function preprocessFeature(f) {
+  if (!f.geometry) return null;
+  const t = f.geometry.type;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  function pt(p) {
+    const w = lonLatToWorld(p);
+    if (w[0] < minX) minX = w[0];
+    if (w[0] > maxX) maxX = w[0];
+    if (w[1] < minY) minY = w[1];
+    if (w[1] > maxY) maxY = w[1];
+    return w;
+  }
+  let world;
+  if (t === "Polygon" || t === "MultiPolygon") {
+    const polys = t === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+    world = polys.map(poly => poly.map(ring => ring.map(pt)));
+  } else if (t === "LineString") {
+    world = f.geometry.coordinates.map(pt);
+  } else if (t === "MultiLineString") {
+    world = f.geometry.coordinates.map(line => line.map(pt));
+  } else {
+    return null;
+  }
+  return {
+    type: t,
+    properties: f.properties || {},
+    world,
+    bbox: [minX, minY, maxX, maxY],
+  };
+}
+
+async function loadLayer(name) {
+  const layer = layers[name];
+  setLayerStatus(name, "loading");
+  try {
+    const res = await fetch(layer.url);
+    const json = await res.json();
+    const features = [];
+    for (const f of json.features) {
+      const pre = preprocessFeature(f);
+      if (pre) features.push(pre);
+    }
+    layer.data = features;
+    setLayerStatus(name, "active");
+    loadedCount++;
+    document.getElementById("loaded-count").textContent = `${loadedCount}/5`;
+    render();
+  } catch (err) {
+    console.error("layer load failed:", name, err);
+    setLayerStatus(name, null);
+  }
+}
+
+// =============================================================================
+// Rendering — background, layers (back→front), labels, texture overlays
+// =============================================================================
+let paperPattern = null;
+function ensurePaperPattern() {
+  if (paperPattern) return;
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 110;
+  const tx = tile.getContext("2d");
+  const img = tx.createImageData(110, 110);
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i + 0] = 90;
+    img.data[i + 1] = 60;
+    img.data[i + 2] = 25;
+    img.data[i + 3] = Math.max(0, (Math.random() - 0.55) * 70);
+  }
+  tx.putImageData(img, 0, 0);
+  paperPattern = ctx.createPattern(tile, "repeat");
+}
+
+function bboxIntersects(b, vb) {
+  return !(b[2] < vb[0] || b[0] > vb[2] || b[3] < vb[1] || b[1] > vb[3]);
+}
+
+function viewBbox() {
+  return [
+    -view.tx / view.scale,
+    -view.ty / view.scale,
+    (cssW - view.tx) / view.scale,
+    (cssH - view.ty) / view.scale,
+  ];
+}
+
+// Draw a polygon feature (Polygon or MultiPolygon stored as nested arrays).
+function tracePolygon(feat) {
+  ctx.beginPath();
+  for (const poly of feat.world) {
+    for (const ring of poly) {
+      const s0 = ring[0];
+      ctx.moveTo(s0[0] * view.scale + view.tx, s0[1] * view.scale + view.ty);
+      for (let i = 1; i < ring.length; i++) {
+        const p = ring[i];
+        ctx.lineTo(p[0] * view.scale + view.tx, p[1] * view.scale + view.ty);
+      }
+      ctx.closePath();
+    }
+  }
+}
+
+function traceLine(feat) {
+  ctx.beginPath();
+  if (feat.type === "LineString") {
+    const ws = feat.world;
+    ctx.moveTo(ws[0][0] * view.scale + view.tx, ws[0][1] * view.scale + view.ty);
+    for (let i = 1; i < ws.length; i++) {
+      ctx.lineTo(ws[i][0] * view.scale + view.tx, ws[i][1] * view.scale + view.ty);
+    }
+  } else {
+    for (const line of feat.world) {
+      ctx.moveTo(line[0][0] * view.scale + view.tx, line[0][1] * view.scale + view.ty);
+      for (let i = 1; i < line.length; i++) {
+        ctx.lineTo(line[i][0] * view.scale + view.tx, line[i][1] * view.scale + view.ty);
+      }
+    }
+  }
+}
+
+function render() {
+  if (!cssW) return;
+
+  // Aged paper background with radial gradient (lighter center).
+  const bg = ctx.createRadialGradient(cssW / 2, cssH / 2, Math.min(cssW, cssH) * 0.15,
+                                       cssW / 2, cssH / 2, Math.max(cssW, cssH) * 0.85);
+  bg.addColorStop(0, "#f6eed8");
+  bg.addColorStop(1, "#e3d4b0");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  const z = zoomLevel();
+  const vb = viewBbox();
+
+  // Borough fills (always)
+  if (layers.boroughs.data) {
+    for (const f of layers.boroughs.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      tracePolygon(f);
+      ctx.fillStyle = BOROUGH_FILLS[f.properties.BoroName] || "#d8c8a8";
+      ctx.fill();
+    }
+  }
+
+  // Parks (z > 2)
+  if (layers.parks.data && z > layers.parks.threshold) {
+    ctx.fillStyle = "rgba(135, 165, 100, 0.55)";
+    for (const f of layers.parks.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      tracePolygon(f);
+      ctx.fill();
+    }
+  }
+
+  // NTA boundaries (z > 1.5) — very thin sepia dashed line
+  if (layers.nta.data && z > layers.nta.threshold) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(85, 50, 20, 0.30)";
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([3, 3]);
+    for (const f of layers.nta.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      tracePolygon(f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Major streets (z > 3) — sepia ink, thicker
+  if (layers.streetsMajor.data && z > layers.streetsMajor.threshold) {
+    ctx.strokeStyle = "rgba(85, 50, 20, 0.55)";
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+    for (const f of layers.streetsMajor.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      traceLine(f);
+      ctx.stroke();
+    }
+  }
+
+  // All streets (z > 6) — thinner, more transparent
+  if (layers.streetsAll.data && z > layers.streetsAll.threshold) {
+    ctx.strokeStyle = "rgba(85, 50, 20, 0.35)";
+    ctx.lineWidth = 0.6;
+    ctx.lineCap = "round";
+    for (const f of layers.streetsAll.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      traceLine(f);
+      ctx.stroke();
+    }
+  }
+
+  // Borough labels (always, sized by zoom)
+  ctx.save();
+  ctx.fillStyle = "rgba(75, 45, 20, 0.85)";
+  ctx.font = `bold ${Math.max(13, 13 * Math.min(z, 2))}px Georgia, "Times New Roman", serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const [name, lp] of Object.entries(BOROUGH_LABELS)) {
+    const [wx, wy] = lonLatToWorld(lp);
+    const sx = wx * view.scale + view.tx;
+    const sy = wy * view.scale + view.ty;
+    if (sx < -100 || sx > cssW + 100 || sy < -50 || sy > cssH + 50) continue;
+    ctx.fillText(name.toUpperCase(), sx, sy);
+  }
+  ctx.restore();
+
+  // NTA labels (z > 4) — small italic serif, near each NTA's centroid
+  if (layers.nta.data && z > 4) {
+    ctx.save();
+    ctx.fillStyle = "rgba(75, 45, 20, 0.65)";
+    ctx.font = "italic 10px Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const f of layers.nta.data) {
+      if (!bboxIntersects(f.bbox, vb)) continue;
+      const cx = (f.bbox[0] + f.bbox[2]) / 2;
+      const cy = (f.bbox[1] + f.bbox[3]) / 2;
+      const sx = cx * view.scale + view.tx;
+      const sy = cy * view.scale + view.ty;
+      if (sx < -50 || sx > cssW + 50 || sy < -50 || sy > cssH + 50) continue;
+      const name = f.properties.NTAName || "";
+      if (name && name.length < 30) ctx.fillText(name, sx, sy);
+    }
+    ctx.restore();
+  }
+
+  // Paper grain overlay
+  ensurePaperPattern();
+  ctx.save();
+  ctx.fillStyle = paperPattern;
+  ctx.globalAlpha = 0.30;
+  ctx.fillRect(0, 0, cssW, cssH);
+  ctx.restore();
+
+  // Vignette
+  const vg = ctx.createRadialGradient(cssW / 2, cssH / 2, Math.min(cssW, cssH) * 0.45,
+                                       cssW / 2, cssH / 2, Math.max(cssW, cssH) * 0.85);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(50, 25, 5, 0.45)");
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  // Update zoom indicator
+  document.getElementById("zoom-pct").textContent = `${(z * 100).toFixed(0)}%`;
+  // Update layer status bullets
+  for (const [name, l] of Object.entries(layers)) {
+    if (!l.data) continue;
+    const visible = z >= l.threshold;
+    setLayerStatus(name, visible ? "active" : null);
+    if (l.data) {
+      const dot = document.querySelector(`.layer-status .row[data-layer="${name}"] .dot`);
+      if (dot && !visible) {
+        dot.classList.remove("active");
+        dot.style.opacity = "0.4";
+      } else if (dot) {
+        dot.style.opacity = "";
+      }
+    }
+  }
+}
+
+// =============================================================================
+// Pan + zoom interaction
+// =============================================================================
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  zoomAt(e.clientX, e.clientY, factor);
+}, { passive: false });
+
+function zoomAt(sx, sy, factor) {
+  const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, view.scale * factor));
+  const actual = newScale / view.scale;
+  view.tx = sx - (sx - view.tx) * actual;
+  view.ty = sy - (sy - view.ty) * actual;
+  view.scale = newScale;
+  render();
+}
+
+const pointers = new Map();
+let pinchStartDist = 0, pinchStartScale = 1, pinchCenter = null;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchStartDist = Math.hypot(a.x - b.x, a.y - b.y);
+    pinchStartScale = view.scale;
+    pinchCenter = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const curr = { x: e.clientX, y: e.clientY };
+  pointers.set(e.pointerId, curr);
+  if (pointers.size === 1) {
+    view.tx += curr.x - prev.x;
+    view.ty += curr.y - prev.y;
+    render();
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const factor = (dist / pinchStartDist) * (pinchStartScale / view.scale);
+    zoomAt(pinchCenter.x, pinchCenter.y, factor);
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinchCenter = null;
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("pointerleave", endPointer);
+
+// =============================================================================
+// Init
+// =============================================================================
+window.addEventListener("resize", () => { resize(); fitToNYC(); render(); });
+resize();
+fitToNYC();
+
+// Kick off all layer loads in parallel — render as each completes.
+for (const name of Object.keys(layers)) {
+  loadLayer(name);
+}
+render();
+</script>
+</body>
+</html>

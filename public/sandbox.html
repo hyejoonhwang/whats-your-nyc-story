@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blob Interaction Sandbox · What's Your NYC Story?</title>
+<style>
+  :root {
+    --bg: #0f0f10;
+    --fg: #f4f3ee;
+    --muted: #6b6a64;
+    --accent: #ff5b3b;
+    --grid: #1a1a1c;
+    --cell-bg: #16161a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 16px; }
+  h1 { margin: 0 0 4px; font-size: 16px; font-weight: 500; }
+  .sub { color: var(--muted); margin-bottom: 12px; font-size: 12px; }
+  .controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  button {
+    background: var(--cell-bg); color: var(--fg); border: 1px solid #2a2a2e;
+    padding: 6px 10px; font: inherit; cursor: pointer; border-radius: 3px;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  label.toggle { color: var(--muted); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .featured { background: #f0ebde; border: 1px solid #2a2a2e; border-radius: 4px; position: relative; aspect-ratio: 16 / 9; overflow: hidden; margin-bottom: 18px; box-shadow: inset 0 0 60px rgba(0,0,0,0.06); }
+  .featured svg { width: 100%; height: 100%; display: block; }
+  .featured-label { position: absolute; top: 10px; left: 12px; font-size: 11px; color: #8a7c5a; letter-spacing: 0.06em; pointer-events: none; user-select: none; text-transform: uppercase; }
+  .featured-label b { color: #2a2825; font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .pin { cursor: pointer; transition: transform 0.08s; transform-origin: center; transform-box: fill-box; }
+  .pin:hover { transform: scale(1.15); }
+  .grid-label { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; margin: 12px 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .cell { background: var(--cell-bg); border: 1px solid #222; border-radius: 4px; position: relative; aspect-ratio: 4 / 3; overflow: hidden; }
+  .cell svg { width: 100%; height: 100%; display: block; }
+  .cell-label { position: absolute; top: 6px; left: 8px; font-size: 11px; color: var(--muted); letter-spacing: 0.04em; pointer-events: none; user-select: none; }
+  .cell-label b { color: var(--fg); font-weight: 500; }
+  .info { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.6; word-break: break-all; }
+  .dot-marker { cursor: pointer; }
+  .dot-marker:hover { stroke: var(--accent); }
+  text.story-count { fill: var(--fg); font-size: 9px; pointer-events: none; user-select: none; }
+</style>
+</head>
+<body>
+
+<h1>Blob Interaction Sandbox</h1>
+<div class="sub">12 ways adjacent story-blobs could share, fight for, or merge into space. Click any dot in any cell to add a story — all 12 cells update.</div>
+
+<div class="controls">
+  <button id="add-random">+ random story</button>
+  <button id="add-dot">+ new dot</button>
+  <button id="reset">reset</button>
+  <label class="toggle"><input type="checkbox" id="breathe"> breathe</label>
+  <label class="toggle"><input type="checkbox" id="show-counts" checked> show counts</label>
+</div>
+
+<!-- shared SVG <defs> for filters reused across cells -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <filter id="metaball-filter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" />
+      <feColorMatrix values="
+        1 0 0 0 0
+        0 1 0 0 0
+        0 0 1 0 0
+        0 0 0 22 -10" />
+    </filter>
+    <filter id="soft-blur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2.5" />
+    </filter>
+  </defs>
+</svg>
+
+<div class="featured">
+  <div class="featured-label">featured · <b>pinboard — one ball-head pin per story, clustered at its dot</b></div>
+  <svg id="featured-svg" viewBox="0 0 400 300"></svg>
+</div>
+
+<div class="grid-label">12 reference mechanics</div>
+
+<main class="grid">
+  <div class="cell" data-mode="metaballs"><div class="cell-label">01 · <b>metaballs</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="squish"><div class="cell-label">02 · <b>soft squish</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="compound"><div class="cell-label">03 · <b>compound merge</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="voronoi"><div class="cell-label">04 · <b>voronoi (curvy)</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="voronoi-noise"><div class="cell-label">05 · <b>voronoi + edge noise</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="voronoi-weighted"><div class="cell-label">06 · <b>weighted voronoi</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="force"><div class="cell-label">07 · <b>force-directed</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="pressure"><div class="cell-label">08 · <b>pressure equalize</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="foam"><div class="cell-label">09 · <b>foam (soap)</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="pseudopod"><div class="cell-label">10 · <b>pseudopod tendrils</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="cellular"><div class="cell-label">11 · <b>cellular spread</b></div><svg viewBox="0 0 400 300"></svg></div>
+  <div class="cell" data-mode="hybrid"><div class="cell-label">12 · <b>hybrid (soft ↔ hard)</b></div><svg viewBox="0 0 400 300"></svg></div>
+</main>
+
+<div class="info" id="info"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script>
+// ============================================================================
+// State: ~14 hand-placed dots arranged for interesting blob interactions.
+// Coordinates live in a 400×300 viewBox; all 12 cells share these.
+// ============================================================================
+const dots = [
+  // dense triangle (3 dots close together) ── Lower East Side cluster
+  { id: 0,  x:  90, y:  90, c: 3 },
+  { id: 1,  x: 135, y: 100, c: 7 },
+  { id: 2,  x: 110, y: 145, c: 1 },
+  // chain of 4 in a line ── crosstown row
+  { id: 3,  x: 220, y:  70, c: 4 },
+  { id: 4,  x: 260, y:  78, c: 2 },
+  { id: 5,  x: 300, y:  86, c: 5 },
+  { id: 6,  x: 340, y:  94, c: 1 },
+  // bottom-left dense one + two close pairs
+  { id: 7,  x:  70, y: 220, c: 8 },
+  { id: 8,  x: 200, y: 195, c: 1 },
+  { id: 9,  x: 230, y: 220, c: 6 },
+  { id: 10, x: 320, y: 200, c: 2 },
+  { id: 11, x: 350, y: 230, c: 1 },
+  { id: 12, x: 175, y: 250, c: 3 },
+  // far-right outlier
+  { id: 13, x: 380, y: 155, c: 1 },
+];
+
+const VIEW_W = 400, VIEW_H = 300;
+const MARGIN = 6;            // keep blobs inside the cell
+const BASE_R = 14;           // base radius before scaling by sqrt(storyCount)
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+let breathe = false;
+let showCounts = true;
+
+// ============================================================================
+// Helpers — stable noise, organic blob path, geometry utilities
+// ============================================================================
+function noise(seed) {
+  // tiny deterministic hash → [0, 1)
+  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function blobRadius(dot) {
+  return BASE_R * Math.sqrt(dot.c);
+}
+
+// Generates a stable lopsided organic outline for a dot at the given radius.
+// Same dot.id → same shape personality, just scaled. `t` is animation time.
+function organicPath(dot, radius, t = 0, jaggedness = 0.30) {
+  const N = 18;
+  const seed = dot.id * 1000 + 7;
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const stable = (noise(seed + i * 13) - 0.5) * jaggedness;
+    const wobble = breathe ? Math.sin(t * 0.0012 + seed + i * 0.7) * 0.05 : 0;
+    const r = radius * (1 + stable + wobble);
+    pts.push([dot.x + Math.cos(a) * r, dot.y + Math.sin(a) * r]);
+  }
+  return d3.line().curve(d3.curveCatmullRomClosed.alpha(0.9))(pts);
+}
+
+// Distance helpers
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+// Color palette: stable per-dot warm hue, semi-transparent
+function dotColor(dot, alpha = 0.78) {
+  const h = (dot.id * 47) % 360;
+  return `hsla(${h}, 60%, 60%, ${alpha})`;
+}
+
+// ============================================================================
+// Rendering primitives — dot markers and helpers shared across renderers
+// ============================================================================
+function el(tag, attrs = {}) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    e.setAttribute(k, v);
+  }
+  return e;
+}
+
+// Adds clickable dot markers (small dark circles with story count) at given positions.
+// `positions` defaults to the canonical dot positions; renderers like force-directed
+// can pass simulation-displaced positions instead.
+function drawDotMarkers(svg, positions = null) {
+  const layer = el("g", { "data-layer": "markers" });
+  for (const d of dots) {
+    const p = positions ? positions[d.id] : d;
+    const m = el("circle", {
+      cx: p.x, cy: p.y, r: 2.5,
+      fill: "#fff", stroke: "#000", "stroke-width": 0.6,
+      class: "dot-marker", "data-dot-id": d.id,
+    });
+    layer.appendChild(m);
+    if (showCounts && d.c > 1) {
+      const t = el("text", {
+        x: p.x + 4, y: p.y - 4, class: "story-count", "data-dot-id": d.id,
+      });
+      t.textContent = d.c;
+      layer.appendChild(t);
+    }
+  }
+  svg.appendChild(layer);
+}
+
+// ============================================================================
+// 12 renderers — one per blob-interaction mechanic
+// ============================================================================
+const renderers = {
+
+  // ── 01 · METABALLS ────────────────────────────────────────────────────────
+  // SVG Gaussian-blur + alpha-threshold filter merges nearby circles into
+  // smooth lava-lamp shapes. Bigger storyCount = bigger circle.
+  metaballs(svg, t) {
+    const g = el("g", { filter: "url(#metaball-filter)" });
+    for (const d of dots) {
+      g.appendChild(el("circle", {
+        cx: d.x, cy: d.y, r: blobRadius(d) * 0.85, fill: dotColor(d, 1),
+      }));
+    }
+    svg.appendChild(g);
+  },
+
+  // ── 02 · SOFT SQUISH ──────────────────────────────────────────────────────
+  // Each blob is organic, but compressed along the axis pointing toward each
+  // neighbor (proportional to neighbor pressure). Blobs touch but stay
+  // individual.
+  squish(svg, t) {
+    for (const d of dots) {
+      const r0 = blobRadius(d);
+      const N = 22;
+      const seed = d.id * 1000 + 13;
+      const pts = [];
+      for (let i = 0; i < N; i++) {
+        const a = (i / N) * Math.PI * 2;
+        const px = d.x + Math.cos(a), py = d.y + Math.sin(a);
+        let r = r0 * (1 + (noise(seed + i * 7) - 0.5) * 0.25);
+        if (breathe) r *= 1 + Math.sin(t * 0.0012 + seed + i) * 0.04;
+        // Pull this perimeter point inward if it's on the side facing a
+        // stronger neighbor.
+        for (const o of dots) {
+          if (o.id === d.id) continue;
+          const dx = o.x - d.x, dy = o.y - d.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const facing = (px * dx + py * dy) / len;
+          if (facing <= 0) continue;
+          const gap = len - r0 - blobRadius(o);
+          if (gap > 4) continue;
+          const force = (o.c / (o.c + d.c)) * Math.max(0, 1 - gap / 30);
+          r *= 1 - 0.55 * force * Math.pow(facing, 2.2);
+        }
+        pts.push([d.x + Math.cos(a) * r, d.y + Math.sin(a) * r]);
+      }
+      const path = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.9))(pts);
+      svg.appendChild(el("path", {
+        d: path, fill: dotColor(d, 0.78), stroke: dotColor(d, 1),
+        "stroke-width": 0.8,
+      }));
+    }
+  },
+
+  // ── 03 · COMPOUND MERGE ───────────────────────────────────────────────────
+  // Connected components: blobs that overlap heavily snap into a single
+  // mercury-style outline; isolated blobs render normally.
+  compound(svg, t) {
+    // union-find over heavy overlap pairs
+    const parent = dots.map((_, i) => i);
+    const find = i => parent[i] === i ? i : (parent[i] = find(parent[i]));
+    const merge = (i, j) => { const a = find(i), b = find(j); if (a !== b) parent[a] = b; };
+    for (let i = 0; i < dots.length; i++) for (let j = i + 1; j < dots.length; j++) {
+      const ri = blobRadius(dots[i]), rj = blobRadius(dots[j]);
+      if (dist(dots[i], dots[j]) < (ri + rj) * 0.7) merge(i, j);
+    }
+    const groups = {};
+    dots.forEach((d, i) => { (groups[find(i)] ||= []).push(d); });
+
+    for (const group of Object.values(groups)) {
+      if (group.length === 1) {
+        svg.appendChild(el("path", {
+          d: organicPath(group[0], blobRadius(group[0]), t),
+          fill: dotColor(group[0], 0.78),
+          stroke: dotColor(group[0], 1), "stroke-width": 0.8,
+        }));
+      } else {
+        // Merged blob: sample union perimeter via metaball-style implicit field
+        const totalC = group.reduce((s, d) => s + d.c, 0);
+        const cx = group.reduce((s, d) => s + d.x * d.c, 0) / totalC;
+        const cy = group.reduce((s, d) => s + d.y * d.c, 0) / totalC;
+        const N = 64;
+        const pts = [];
+        for (let i = 0; i < N; i++) {
+          const a = (i / N) * Math.PI * 2, dx = Math.cos(a), dy = Math.sin(a);
+          // raycast outward, find isoline
+          let lo = 0, hi = 200;
+          for (let k = 0; k < 12; k++) {
+            const m = (lo + hi) / 2;
+            const px = cx + dx * m, py = cy + dy * m;
+            let f = 0;
+            for (const d of group) {
+              const r = blobRadius(d);
+              const dd = Math.hypot(px - d.x, py - d.y);
+              f += (r * r) / (dd * dd + 1);
+            }
+            if (f > 1) lo = m; else hi = m;
+          }
+          pts.push([cx + dx * lo, cy + dy * lo]);
+        }
+        const fill = dotColor(group.reduce((a, b) => a.c >= b.c ? a : b), 0.78);
+        svg.appendChild(el("path", {
+          d: d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5))(pts),
+          fill, stroke: "rgba(255,255,255,0.1)", "stroke-width": 0.5,
+        }));
+      }
+    }
+  },
+
+  // ── 04 · VORONOI (curvy boundaries) ───────────────────────────────────────
+  voronoi(svg, t) {
+    const delaunay = d3.Delaunay.from(dots, d => d.x, d => d.y);
+    const v = delaunay.voronoi([MARGIN, MARGIN, VIEW_W - MARGIN, VIEW_H - MARGIN]);
+    for (let i = 0; i < dots.length; i++) {
+      const cell = v.cellPolygon(i);
+      if (!cell) continue;
+      const path = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.6))(cell.slice(0, -1));
+      svg.appendChild(el("path", {
+        d: path, fill: dotColor(dots[i], 0.55), stroke: "rgba(255,255,255,0.15)",
+        "stroke-width": 0.6,
+      }));
+    }
+  },
+
+  // ── 05 · VORONOI WITH EDGE NOISE ──────────────────────────────────────────
+  // Same Voronoi, but each edge is split + perpendicular-perturbed, then
+  // smoothed. Hand-drawn / wave-y feel.
+  "voronoi-noise"(svg, t) {
+    const delaunay = d3.Delaunay.from(dots, d => d.x, d => d.y);
+    const v = delaunay.voronoi([MARGIN, MARGIN, VIEW_W - MARGIN, VIEW_H - MARGIN]);
+    for (let i = 0; i < dots.length; i++) {
+      const cell = v.cellPolygon(i);
+      if (!cell) continue;
+      const inflated = [];
+      const verts = cell.slice(0, -1);
+      for (let j = 0; j < verts.length; j++) {
+        const a = verts[j], b = verts[(j + 1) % verts.length];
+        inflated.push(a);
+        // 2 extra control points along this edge with perpendicular noise
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const px = -dy, py = dx;
+        const len = Math.hypot(px, py) || 1;
+        for (const f of [0.33, 0.67]) {
+          const s = (noise(i * 31 + j * 7 + f * 100) - 0.5) * 8;
+          inflated.push([a[0] + dx * f + (px / len) * s, a[1] + dy * f + (py / len) * s]);
+        }
+      }
+      const path = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.7))(inflated);
+      svg.appendChild(el("path", {
+        d: path, fill: dotColor(dots[i], 0.55), stroke: "rgba(255,255,255,0.1)",
+        "stroke-width": 0.5,
+      }));
+    }
+  },
+
+  // ── 06 · WEIGHTED VORONOI ─────────────────────────────────────────────────
+  // Approximation via additively-weighted distance. For each grid pixel,
+  // owner = argmin(distSquared - weight). Renders pixel grid (low res) +
+  // soft blur to round the staircase.
+  "voronoi-weighted"(svg, t) {
+    const COLS = 80, ROWS = 60, CELL = VIEW_W / COLS;
+    const ownership = new Int16Array(COLS * ROWS);
+    const weights = dots.map(d => d.c * 60);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const px = c * CELL + CELL / 2, py = r * CELL + CELL / 2;
+        let best = Infinity, bestId = 0;
+        for (let i = 0; i < dots.length; i++) {
+          const dd = (px - dots[i].x) ** 2 + (py - dots[i].y) ** 2 - weights[i];
+          if (dd < best) { best = dd; bestId = i; }
+        }
+        ownership[r * COLS + c] = bestId;
+      }
+    }
+    // Group adjacent cells by owner, render per-dot path of rectangles
+    const g = el("g", { filter: "url(#soft-blur)" });
+    for (let i = 0; i < dots.length; i++) {
+      let d = "";
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (ownership[r * COLS + c] === i) {
+            d += `M${c * CELL} ${r * CELL}h${CELL}v${CELL}h${-CELL}z`;
+          }
+        }
+      }
+      g.appendChild(el("path", { d, fill: dotColor(dots[i], 0.85) }));
+    }
+    svg.appendChild(g);
+  },
+
+  // ── 07 · FORCE-DIRECTED BUBBLES ───────────────────────────────────────────
+  // Per-cell physics: dots repel by collide radius = sqrt(storyCount) * BASE.
+  // Run simulation each render. Markers in this cell follow the simulation.
+  force(svg, t) {
+    const sim = dots.map(d => ({ ...d, fx: null, fy: null }));
+    const simulation = d3.forceSimulation(sim)
+      .force("collide", d3.forceCollide().radius(d => blobRadius(d) + 1).strength(0.9))
+      .force("x", d3.forceX(d => d.x).strength(0.06))
+      .force("y", d3.forceY(d => d.y).strength(0.06))
+      .stop();
+    for (let i = 0; i < 90; i++) simulation.tick();
+    for (const s of sim) {
+      const d = { id: s.id, x: s.x, y: s.y, c: s.c };
+      svg.appendChild(el("path", {
+        d: organicPath(d, blobRadius(d), t, 0.22),
+        fill: dotColor(d, 0.78), stroke: dotColor(d, 1), "stroke-width": 0.8,
+      }));
+    }
+    // markers follow simulated positions
+    const positions = {};
+    for (const s of sim) positions[s.id] = { x: s.x, y: s.y };
+    drawDotMarkers(svg, positions);
+    return true; // signal: markers already drawn
+  },
+
+  // ── 08 · PRESSURE EQUALIZATION ────────────────────────────────────────────
+  // For each dot, max radius = min over neighbors of distance to "contact
+  // point" (weighted by sqrt of story counts). Then render organic shape.
+  pressure(svg, t) {
+    const radii = dots.map(d => Infinity);
+    for (let i = 0; i < dots.length; i++) {
+      for (let j = 0; j < dots.length; j++) {
+        if (i === j) continue;
+        const D = dist(dots[i], dots[j]);
+        const wi = Math.sqrt(dots[i].c), wj = Math.sqrt(dots[j].c);
+        const ri = D * wi / (wi + wj);
+        if (ri < radii[i]) radii[i] = ri;
+      }
+      // also cap by canvas edges
+      radii[i] = Math.min(radii[i],
+        dots[i].x - MARGIN, dots[i].y - MARGIN,
+        VIEW_W - MARGIN - dots[i].x, VIEW_H - MARGIN - dots[i].y);
+      radii[i] = Math.max(4, radii[i]);
+    }
+    for (let i = 0; i < dots.length; i++) {
+      svg.appendChild(el("path", {
+        d: organicPath(dots[i], radii[i], t, 0.20),
+        fill: dotColor(dots[i], 0.78), stroke: dotColor(dots[i], 1),
+        "stroke-width": 0.8,
+      }));
+    }
+  },
+
+  // ── 09 · FOAM (soap bubbles) ──────────────────────────────────────────────
+  // Weighted Voronoi with curved boundaries between neighbors — boundary
+  // bows convex into smaller-pressure neighbor.
+  foam(svg, t) {
+    const delaunay = d3.Delaunay.from(dots, d => d.x, d => d.y);
+    const v = delaunay.voronoi([MARGIN, MARGIN, VIEW_W - MARGIN, VIEW_H - MARGIN]);
+    // First layer: soft Voronoi cells.
+    for (let i = 0; i < dots.length; i++) {
+      const cell = v.cellPolygon(i);
+      if (!cell) continue;
+      // perturb each vertex toward dot center proportional to neighbor pressures
+      const verts = cell.slice(0, -1).map(([x, y]) => {
+        // find closest other dot to this vertex
+        let nearest = null, nd = Infinity;
+        for (const o of dots) {
+          if (o.id === dots[i].id) continue;
+          const D = Math.hypot(o.x - x, o.y - y);
+          if (D < nd) { nd = D; nearest = o; }
+        }
+        if (!nearest) return [x, y];
+        // bow inward if neighbor is bigger
+        const diff = nearest.c - dots[i].c;
+        const dx = dots[i].x - x, dy = dots[i].y - y;
+        const len = Math.hypot(dx, dy) || 1;
+        const push = diff > 0 ? Math.min(8, diff * 1.4) : 0;
+        return [x + (dx / len) * push, y + (dy / len) * push];
+      });
+      const path = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.85))(verts);
+      svg.appendChild(el("path", {
+        d: path, fill: dotColor(dots[i], 0.55), stroke: "rgba(255,255,255,0.18)",
+        "stroke-width": 0.7,
+      }));
+    }
+  },
+
+  // ── 10 · PSEUDOPOD TENDRILS ───────────────────────────────────────────────
+  // Each dot grows N tendrils (N = storyCount, capped). Tendrils repel from
+  // neighbors via vector field; rendered as curved thick strokes.
+  pseudopod(svg, t) {
+    for (const d of dots) {
+      const N = Math.min(d.c + 1, 9);
+      const seed = d.id * 1000;
+      // base body
+      svg.appendChild(el("circle", {
+        cx: d.x, cy: d.y, r: 4 + Math.sqrt(d.c),
+        fill: dotColor(d, 0.85),
+      }));
+      for (let k = 0; k < N; k++) {
+        let a = (k / N) * Math.PI * 2 + noise(seed + k) * 0.4;
+        // bias direction away from nearest neighbors
+        let dx = Math.cos(a), dy = Math.sin(a);
+        for (const o of dots) {
+          if (o.id === d.id) continue;
+          const ox = o.x - d.x, oy = o.y - d.y;
+          const D = Math.hypot(ox, oy);
+          if (D > 100) continue;
+          const force = (o.c) / (D * D + 1) * 200;
+          dx -= (ox / D) * force;
+          dy -= (oy / D) * force;
+        }
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len; dy /= len;
+        const tendrilLen = 8 + Math.sqrt(d.c) * 6 + noise(seed + k * 3) * 4;
+        const tipX = d.x + dx * tendrilLen, tipY = d.y + dy * tendrilLen;
+        // curved control point: perpendicular wobble
+        const px = -dy, py = dx;
+        const wobble = (noise(seed + k * 5) - 0.5) * tendrilLen * 0.5;
+        const ctrlX = d.x + dx * tendrilLen * 0.5 + px * wobble;
+        const ctrlY = d.y + dy * tendrilLen * 0.5 + py * wobble;
+        svg.appendChild(el("path", {
+          d: `M${d.x} ${d.y} Q${ctrlX} ${ctrlY} ${tipX} ${tipY}`,
+          fill: "none",
+          stroke: dotColor(d, 0.85),
+          "stroke-width": Math.max(2, 4 - k * 0.3),
+          "stroke-linecap": "round",
+        }));
+      }
+    }
+  },
+
+  // ── 11 · CELLULAR SPREAD ──────────────────────────────────────────────────
+  // Coarse pixel grid → each pixel goes to argmin(d / sqrt(c+1)). Blur softens
+  // staircase edges into curves.
+  cellular(svg, t) {
+    const COLS = 50, ROWS = 38, CELL = VIEW_W / COLS;
+    const g = el("g", { filter: "url(#soft-blur)" });
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const px = c * CELL + CELL / 2, py = r * CELL + CELL / 2;
+        let best = Infinity, bestId = 0;
+        for (const d of dots) {
+          const dd = Math.hypot(px - d.x, py - d.y) / Math.sqrt(d.c + 0.4);
+          if (dd < best) { best = dd; bestId = d.id; }
+        }
+        g.appendChild(el("rect", {
+          x: c * CELL - 0.5, y: r * CELL - 0.5,
+          width: CELL + 1, height: CELL + 1,
+          fill: dotColor(dots[bestId], 0.95),
+        }));
+      }
+    }
+    svg.appendChild(g);
+  },
+
+  // ── 12 · HYBRID ───────────────────────────────────────────────────────────
+  // Soft metaball merge for similar-pressure neighbors; thick territorial
+  // border drawn over the top for high-difference pairs.
+  hybrid(svg, t) {
+    // Layer 1: metaball-merged underlying blobs
+    const g = el("g", { filter: "url(#metaball-filter)", opacity: 0.85 });
+    for (const d of dots) {
+      g.appendChild(el("circle", {
+        cx: d.x, cy: d.y, r: blobRadius(d) * 0.85, fill: dotColor(d, 1),
+      }));
+    }
+    svg.appendChild(g);
+    // Layer 2: territorial borders for high-pressure-difference pairs
+    const delaunay = d3.Delaunay.from(dots, d => d.x, d => d.y);
+    const tris = delaunay.triangles;
+    const drawn = new Set();
+    for (let i = 0; i < tris.length; i += 3) {
+      for (const [a, b] of [[tris[i], tris[i+1]], [tris[i+1], tris[i+2]], [tris[i+2], tris[i]]]) {
+        const k = a < b ? `${a}-${b}` : `${b}-${a}`;
+        if (drawn.has(k)) continue;
+        drawn.add(k);
+        const da = dots[a], db = dots[b];
+        const diff = Math.abs(da.c - db.c);
+        if (diff < 3) continue;
+        // midpoint biased toward smaller side (bigger dominates)
+        const wa = Math.sqrt(da.c), wb = Math.sqrt(db.c);
+        const mx = (da.x * wa + db.x * wb) / (wa + wb);
+        const my = (da.y * wa + db.y * wb) / (wa + wb);
+        const dx = db.x - da.x, dy = db.y - da.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const px = -dy / len, py = dx / len;
+        const halfLen = Math.min(40, len * 0.4);
+        svg.appendChild(el("line", {
+          x1: mx - px * halfLen, y1: my - py * halfLen,
+          x2: mx + px * halfLen, y2: my + py * halfLen,
+          stroke: "rgba(255, 91, 59, 0.85)",
+          "stroke-width": 1.2 + Math.min(3, diff * 0.4),
+          "stroke-linecap": "round",
+        }));
+      }
+    }
+  },
+
+};
+
+// ============================================================================
+// FEATURED — pinboard. Each story = one ball-head pin clustered around its
+// dot. Pins are 3D-shaded glossy spheres on a paper-map background. The
+// number of pins at a dot equals its story count. Click any pin to add
+// another to its cluster.
+// ============================================================================
+const featuredSvg = document.getElementById("featured-svg");
+
+const PIN_RADIUS = 6.5;
+const CLUSTER_RADIUS = 18;        // how far pins spread from the dot center
+
+// Reference palette: vibrant glossy plastic pin colors.
+// Each entry: mid (saturated body), light (highlight), dark (rim shadow).
+const PIN_PALETTE = [
+  { mid: "#e83a26", light: "#ffb1a0", dark: "#7c1410" }, // red
+  { mid: "#f7c920", light: "#fff4a8", dark: "#a8870a" }, // yellow
+  { mid: "#1e6dd4", light: "#7bb5ff", dark: "#0a3672" }, // blue
+  { mid: "#2ea84a", light: "#88dba0", dark: "#155a26" }, // green
+  { mid: "#f0ebde", light: "#ffffff", dark: "#a89e8a" }, // white-ish
+  { mid: "#2a2825", light: "#7a766c", dark: "#0a0908" }, // black
+  { mid: "#7a2eb8", light: "#c79be0", dark: "#3a1265" }, // purple
+  { mid: "#e8722e", light: "#ffb98a", dark: "#8c3a0e" }, // orange
+];
+
+// Stable per-pin position around a dot. Pin 0 sits near the center; later
+// pins land at random angles + distances within CLUSTER_RADIUS, sqrt-scaled
+// for uniform area distribution. Index drives the seed so adding a pin
+// never reshuffles the existing ones.
+function pinPosition(dot, pinIndex) {
+  const seed = dot.id * 9173 + pinIndex * 31;
+  if (pinIndex === 0) {
+    return [
+      dot.x + (noise(seed)     - 0.5) * 4,
+      dot.y + (noise(seed + 1) - 0.5) * 4,
+    ];
+  }
+  const angle = noise(seed)     * Math.PI * 2;
+  const distance = CLUSTER_RADIUS * Math.sqrt(noise(seed + 1));
+  return [dot.x + Math.cos(angle) * distance,
+          dot.y + Math.sin(angle) * distance];
+}
+
+function pinColorIdx(dotId, pinIndex) {
+  return Math.floor(noise(dotId * 9173 + pinIndex * 17 + 991) * PIN_PALETTE.length);
+}
+
+function renderPinboard() {
+  featuredSvg.innerHTML = "";
+
+  // Build <defs>: one radial gradient per pin color (offset center for the
+  // top-left highlight) + one drop-shadow filter for all pins.
+  const defs = el("defs");
+  const gradients = PIN_PALETTE.map((p, i) => `
+    <radialGradient id="pin-grad-${i}" cx="0.32" cy="0.28" r="0.85">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="22%"  stop-color="${p.light}"/>
+      <stop offset="55%"  stop-color="${p.mid}"/>
+      <stop offset="100%" stop-color="${p.dark}"/>
+    </radialGradient>`).join("");
+  defs.innerHTML = `
+    <filter id="pin-shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.8"/>
+      <feOffset dx="0.6" dy="1.6"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.4"/></feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    ${gradients}`;
+  featuredSvg.appendChild(defs);
+
+  // Collect all pins, sort by y so lower pins paint on top of upper ones
+  // (gives a slight stacking / depth feel for clusters).
+  const pins = [];
+  for (const d of dots) {
+    for (let k = 0; k < d.c; k++) {
+      const [px, py] = pinPosition(d, k);
+      pins.push({ x: px, y: py, ci: pinColorIdx(d.id, k), dotId: d.id });
+    }
+  }
+  pins.sort((a, b) => a.y - b.y);
+
+  const g = el("g", { filter: "url(#pin-shadow)" });
+  for (const pin of pins) {
+    g.appendChild(el("circle", {
+      cx: pin.x, cy: pin.y, r: PIN_RADIUS,
+      fill: `url(#pin-grad-${pin.ci})`,
+      class: "pin", "data-dot-id": pin.dotId,
+    }));
+  }
+  featuredSvg.appendChild(g);
+}
+
+// ============================================================================
+// Render dispatcher — re-renders all 12 reference cells with the same dot data.
+// ============================================================================
+function renderAll(t = 0) {
+  document.querySelectorAll(".cell").forEach(cell => {
+    const mode = cell.dataset.mode;
+    const svg = cell.querySelector("svg");
+    svg.innerHTML = "";
+    const renderer = renderers[mode];
+    if (!renderer) return;
+    const drewMarkers = renderer(svg, t);
+    if (!drewMarkers) drawDotMarkers(svg);
+  });
+  renderPinboard();
+  updateInfo();
+}
+
+function updateInfo() {
+  const counts = dots.map(d => `${d.id}:${d.c}`).join("  ");
+  document.getElementById("info").textContent = `${dots.length} dots · ${dots.reduce((s, d) => s + d.c, 0)} total stories · ${counts}`;
+}
+
+// ============================================================================
+// Event handlers
+// ============================================================================
+document.addEventListener("click", e => {
+  const id = e.target.getAttribute && e.target.getAttribute("data-dot-id");
+  if (id != null) {
+    dots[+id].c += 1;
+    renderAll();
+  }
+});
+
+document.getElementById("add-random").onclick = () => {
+  dots[Math.floor(Math.random() * dots.length)].c += 1;
+  renderAll();
+};
+
+document.getElementById("reset").onclick = () => {
+  dots.forEach(d => d.c = 1);
+  renderAll();
+};
+
+document.getElementById("add-dot").onclick = () => {
+  const id = dots.length;
+  dots.push({
+    id,
+    x: 30 + Math.random() * (VIEW_W - 60),
+    y: 30 + Math.random() * (VIEW_H - 60),
+    c: 1,
+  });
+  renderAll();
+};
+
+document.getElementById("breathe").onchange = e => {
+  breathe = e.target.checked;
+  if (breathe) startBreathe();
+};
+
+document.getElementById("show-counts").onchange = e => {
+  showCounts = e.target.checked;
+  renderAll();
+};
+
+let rafId = null;
+function startBreathe() {
+  cancelAnimationFrame(rafId);
+  const loop = (t) => {
+    if (!breathe) return;
+    renderAll(t);
+    rafId = requestAnimationFrame(loop);
+  };
+  rafId = requestAnimationFrame(loop);
+}
+
+renderAll();
+</script>
+</body>
+</html>
