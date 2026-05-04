@@ -1,33 +1,65 @@
 # What's Your NYC Story?
 
-A real-time, zoomable, collaborative canvas of New York City made of stories.
+A real-time, zoomable, collaborative pinboard of New York City made of stories.
 
-NYC is rendered as a 58×76 dot grid. Every dot can hold stories and drawings written by anyone. As more stories pile into a dot, its title competes for space against its neighbors — recency wins inside a dot, density wins between dots — so the map literally rearranges itself as a typographic pressure system as people write into it.
+🌐 **Live at [whatsyournycstory.live](https://whatsyournycstory.live)**
 
-This is the live, multi-user successor to my asynchronous *Dot Your Story* project, built for NYU ITP's Live Web final and submitted as the open-source class project.
+NYC is rendered as a vintage paper map. When you click a spot that holds your story, a sticky-note popup appears — write your name, the place, what happened, and snap a quick selfie. Submit it and your post-it gets pinned to the map at the exact spot you clicked. Anyone visiting the site sees it live: cursors drift across the map in real time, others' typing pulses on their dots as they write, and new pins drop onto the map the moment they're posted.
 
-## Built on top of [Pretext](https://github.com/chenglou/pretext)
+Zoom out and the city is dotted with **3D ball-head pins** — one per story, color-coded, clustered around their spots. Zoom in and the pins fade into **paper post-its** with the actual stories typed on them, each pinned with its own ball-head, slightly tilted, casting drop shadows on the cream paper underneath. Click through stacked post-its with a small `1/n →` indicator. Drag any post-it freely (it snaps back to its real location on refresh).
 
-The load-bearing dependency is [`@chenglou/pretext`](https://github.com/chenglou/pretext), a canvas text layout library by Cheng Lou. Pretext is what makes per-keystroke and per-zoom reflow across the entire map fast enough to feel alive — laying out hundreds of titles on `<canvas>` at 60fps, instead of fighting the DOM.
+Built for NYU ITP's Live Web final — and submitted as the project for ITP's Open Source class.
 
-This project is an open-source extension of that ecosystem: a real-world stress test of Pretext driving a typographic map that hundreds of people can reshape at once.
+## Built on Pretext
+
+The text layout inside every post-it uses Cheng Lou's [`@chenglou/pretext`](https://github.com/chenglou/pretext) — a canvas text layout library that makes per-zoom reflow fast enough that the post-its can keep growing as you zoom in, with the text rewrapping smoothly to fit each new size. Pretext is also what powers the live-drafting layer: as a peer types into their post-it, every other viewer sees the text being laid out letter-by-letter on the canvas in real time.
 
 ## Features
 
-- 58×76 NYC dot grid rendered on a single `<canvas>`
-- Smooth pan + continuous zoom (desktop wheel + mouse drag, mobile pinch + touch)
-- Three precomputed zoom tiers (city / borough / blocks) with interpolated transitions
-- Pretext-driven title competition: dense neighborhoods crowd out sparse ones in real time
-- Live cursors, live typing, live drawing — broadcast over Socket.io
-- Permanent archive: every story stays forever, the city grows over time
+### Map
+- **Vintage paper background** rendered from real NYC borough boundaries (NYC OpenData / ArcGIS), with a letterbox projection that preserves NYC's true aspect ratio
+- **Five progressive map layers** that fade in as you zoom: borough fills → neighborhood (NTA) outlines → parks → major streets → all 47k built streets
+- **Paper grain texture** + edge vignette for the printed-on-paper feel
+- **Italic Georgia serif borough labels** that scale with zoom
+
+### Stories
+- **Pin at exact world coords** — click anywhere on land to drop a pin precisely where your story happened (no grid snapping)
+- **3D-shaded ball-head pins** at zoom-out via canvas radial gradients (highlight upper-left, dark rim lower-right)
+- **Tilted paper post-its** at zoom-in — each with its own seeded color, tilt, drop shadow, paper grain, top pin
+- **Stacked clusters** with arrow nav (`1/n →`) when multiple stories are posted at the same spot
+- **Draggable** in the current session — refresh and they snap back to their canonical positions
+- **Photo + text reflow around the actual figure silhouette**, not its bounding box
+
+### Camera & photos
+- **Mirrored selfie preview** for natural orientation
+- **Background removal via [MediaPipe Selfie Segmentation](https://google.github.io/mediapipe/solutions/selfie_segmentation.html)** — captured photos have their backgrounds made transparent automatically, so just the person ends up on the post-it
+- **Old JPEG photos auto-reprocess** in the background and are saved back to the server as transparent PNGs
+- **Per-row alpha-channel sampling** drives the text reflow, so the story text actually wraps around the curve of the figure's outline
+
+### Multi-user
+- **Live cursors** — every connected viewer sees every other viewer's mouse position drifting across the map (throttled to 10fps, interpolated client-side)
+- **Live drafting** — as a peer types in their writer popup, every other viewer sees a pulsing ring at the click location and the text appearing letter-by-letter on the page
+- **Story commits** broadcast over Socket.io — newly submitted stories appear instantly on every connected client
+
+### Safety
+- **Gemini moderation** on every submission — local hard-block list catches obvious profanity / slurs / prompt injection instantly, then [Gemini 2.5 Flash](https://deepmind.google/technologies/gemini/) reviews the rest with a nonce-delimited prompt that's resistant to injection attacks
+- **Land-only placement** — clicks in water (rivers, harbor, NJ side) are silently rejected via point-in-polygon against the borough geometry
+- **Inline confirmation modal** if you click outside the writer with unsaved content
+
+### Intro panel
+A **fixed corkboard** in the upper-left of the viewport with three pinned papers: project title, a personal note about why the project exists, and a 4-step how-to.
 
 ## Stack
 
-- Node.js + Express 5
-- Socket.io for real-time presence, typing, and stroke streaming
-- NeDB for persistent story + drawing storage
-- `@chenglou/pretext` for canvas text layout
-- Vanilla JS on the client — no framework
+- **Node.js + Express 5** server
+- **Socket.io** for real-time presence, typing, and story commits
+- **NeDB** for persistent story + photo storage
+- **[@chenglou/pretext](https://github.com/chenglou/pretext)** for canvas text layout
+- **[MediaPipe Selfie Segmentation](https://google.github.io/mediapipe/solutions/selfie_segmentation.html)** (lazy-loaded from CDN) for background removal
+- **[Gemini 2.5 Flash](https://deepmind.google/technologies/gemini/)** for content moderation
+- **NYC OpenData / ArcGIS** GeoJSON for boroughs, neighborhoods, parks, streets
+- **dotenv** for API key management
+- **Vanilla JS** on the client — no framework
 
 ## Getting Started
 
@@ -38,33 +70,55 @@ npm install
 npm start
 ```
 
-Then open http://localhost:5001 in two or more browser windows to see live sync working.
+Then open http://localhost:5001 in two browser windows to see live sync working.
 
-For development with auto-reload:
+For dev with auto-reload:
 
 ```bash
 npm run dev
 ```
 
+### Optional: enable Gemini moderation
+
+Create a `.env` file in the project root:
+
+```
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Without the key, moderation falls back to the hard-block regex list only (still functional, just less nuanced). Get a key from [Google AI Studio](https://aistudio.google.com/).
+
 ## Project Structure
 
 ```
-server.js          Express + Socket.io + NeDB server
+server.js                       Express + Socket.io + NeDB + Gemini moderation
 public/
-  index.html       Single-page canvas client
-  app.js           Canvas renderer, viewport transform, Pretext layout cache, socket client
-  grid.js          The 58×76 binary NYC grid
-  style.css        Minimal styles
-data/stories.db    NeDB persistent store
+  index.html                    Single-page canvas client
+  app.js                        Renderer, viewport transform, pin/post-it logic, socket client
+  grid.js                       58×76 binary NYC land/water grid (generated from boroughs)
+  style.css                     Writer popup styling
+  map-styles.html               Standalone vintage-map demo (zoomable, with progressive layers)
+  sandbox.html                  Blob-interaction sandbox (early design exploration)
+  data/                         GeoJSON layers (boroughs, neighborhoods, parks, streets)
+data/stories.db                 NeDB persistent store (gitignored)
+.github/workflows/deploy.yml    Auto-deploy to Digital Ocean droplet on push to main
 ```
+
+## Deployment
+
+Live at https://whatsyournycstory.live, hosted on a small Digital Ocean droplet alongside other ITP class projects.
+
+Push to `main` triggers a GitHub Actions workflow that SSHes into the droplet, runs `git pull && npm install && pm2 restart`. End-to-end deploy takes ~30 seconds. SSL via Let's Encrypt with auto-renewal.
+
+See [BLOG.md](./BLOG.md) for the full process writeup.
 
 ## Roadmap
 
-See [PLAN.md](./PLAN.md) for the full step-by-step build plan and [PROCESS_LOG.md](./PROCESS_LOG.md) for ongoing notes.
+See [PLAN.md](./PLAN.md) for the original build plan and [PROCESS_LOG.md](./PROCESS_LOG.md) for ongoing notes.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -72,6 +126,8 @@ Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE
 
 ## Credits
 
-- [Pretext](https://github.com/chenglou/pretext) by Cheng Lou — the canvas text layout engine that makes all of this possible.
-- Original *Dot Your Story* project by Summer Hwang.
+- **[Pretext](https://github.com/chenglou/pretext)** by Cheng Lou — the canvas text layout engine that makes the typography on every post-it possible.
+- **[MediaPipe Selfie Segmentation](https://google.github.io/mediapipe/solutions/selfie_segmentation.html)** by Google — the open-source ML model that removes photo backgrounds in-browser.
+- **[NYC OpenData](https://opendata.cityofnewyork.us/)** — borough, neighborhood, park, and street GeoJSON.
+- Original *Dot Your Story* project by Summer Hwang (the asynchronous predecessor this evolved from).
 - Built for ITP Live Web (Spring 2026), and as the open-source class project at NYU ITP.
