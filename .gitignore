@@ -15,3 +15,4 @@ Thumbs.db
 # local data — comment out if you want to ship seed stories
 data/*.db
 data/*.db.~
+data/*.backup*
