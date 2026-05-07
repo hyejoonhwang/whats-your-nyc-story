@@ -31,19 +31,21 @@ const FONT = `${FONT_SIZE}px ${FONT_FAMILY}`;
 // clusters, and box-drawn frames for stories. No colors, no textures, no
 // shadows — everything is text or a single-pixel black line.
 const INK = "#000";
-const INK_MUTED = "rgba(0,0,0,0.55)";
-const INK_FAINT = "rgba(0,0,0,0.30)";
+const INK_MUTED = "rgba(0,0,0,0.55)";   // borough labels, HUD, drafts
+const INK_FAINT = "rgba(0,0,0,0.30)";   // (still used as faint accent)
+const MAP_GREY = "#c8c8c8";             // every line on the map
 const PAPER = "#fff";
 
-// Story box sizing. The card starts as a tiny name-tag (just a framed name)
-// and grows: header gains the spot when there's room, then a body with the
-// story when there's even more room.
+// Story box sizing. Cards hold off until the user has really zoomed in —
+// otherwise hundreds of dots' cards would all pile up at moderate zoom.
+// They also stay small at full zoom; the map's job at lower zoom is to show
+// markers + labels + streets, not novella-length cards.
 const BOX_PAD = 4;
-const BOX_MIN_INNER = 28;                       // inner width in screen px when box first appears
-const BOX_MAX_INNER = 140;                      // inner width in screen px at full zoom
-const BOX_FADE_START = 3.0;                     // box pops in at this scale
-const MARKER_BOX_OFFSET_X = 24;
-const MARKER_BOX_OFFSET_Y = -24;
+const BOX_MIN_INNER = 18;                       // inner width in screen px when box first appears
+const BOX_MAX_INNER = 80;                       // inner width in screen px at full zoom
+const BOX_FADE_START = 15;                      // box pops in only after ~15× zoom
+const MARKER_BOX_OFFSET_X = 22;
+const MARKER_BOX_OFFSET_Y = -22;
 
 // Cluster marker characters — driven by cluster.stories.length.
 // Stay visible at every zoom level; the leader line anchors to them.
@@ -438,10 +440,10 @@ function renderMapBackground() {
 
   const vb = [-view.tx / s, -view.ty / s, (W - view.tx) / s, (H - view.ty) / s];
 
-  // Parks — outlined only.
+  // Parks — outlined in light grey.
   if (mapLayers.parks.data && s > mapLayers.parks.threshold) {
     ctx.save();
-    ctx.strokeStyle = INK_FAINT;
+    ctx.strokeStyle = MAP_GREY;
     ctx.lineWidth = 0.5;
     for (const f of mapLayers.parks.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
@@ -451,10 +453,10 @@ function renderMapBackground() {
     ctx.restore();
   }
 
-  // NTA boundaries — thin dashed.
+  // NTA boundaries — light grey, thin dashed.
   if (mapLayers.nta.data && s > mapLayers.nta.threshold) {
     ctx.save();
-    ctx.strokeStyle = INK_FAINT;
+    ctx.strokeStyle = MAP_GREY;
     ctx.lineWidth = 0.4;
     ctx.setLineDash([2, 3]);
     for (const f of mapLayers.nta.data) {
@@ -465,10 +467,10 @@ function renderMapBackground() {
     ctx.restore();
   }
 
-  // Major streets — thin black.
+  // Major streets — light grey, slightly heavier weight to read above NTAs.
   if (mapLayers.streetsMajor.data && s > mapLayers.streetsMajor.threshold) {
     ctx.save();
-    ctx.strokeStyle = INK_MUTED;
+    ctx.strokeStyle = MAP_GREY;
     ctx.lineWidth = 0.7;
     ctx.lineCap = "round";
     for (const f of mapLayers.streetsMajor.data) {
@@ -479,10 +481,10 @@ function renderMapBackground() {
     ctx.restore();
   }
 
-  // All streets — even thinner.
+  // All streets — light grey, thinnest weight.
   if (mapLayers.streetsAll.data && s > mapLayers.streetsAll.threshold) {
     ctx.save();
-    ctx.strokeStyle = INK_FAINT;
+    ctx.strokeStyle = MAP_GREY;
     ctx.lineWidth = 0.4;
     ctx.lineCap = "round";
     for (const f of mapLayers.streetsAll.data) {
