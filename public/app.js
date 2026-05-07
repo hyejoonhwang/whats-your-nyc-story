@@ -37,13 +37,14 @@ const PAPER = "#fff";
 
 // Story box sizing. The inner width grows from BOX_MIN_INNER (when boxes
 // first appear at BOX_FADE_START) all the way up to BOX_MAX_INNER at MAX_SCALE.
-// Smaller floor so boxes feel modest at first then expand as you zoom in.
+// Tighter floor + later threshold so boxes hold off until you've actually
+// zoomed in, then start small and grow.
 const BOX_PAD = 4;
-const BOX_MIN_INNER = 50;                       // inner width in screen px when box first appears
+const BOX_MIN_INNER = 40;                       // inner width in screen px when box first appears
 const BOX_MAX_INNER = 320;                      // inner width in screen px at full zoom
-const BOX_FADE_START = 1.5;                     // box pops in at this scale
-const MARKER_BOX_OFFSET_X = 30;
-const MARKER_BOX_OFFSET_Y = -30;
+const BOX_FADE_START = 3.0;                     // box pops in at this scale
+const MARKER_BOX_OFFSET_X = 28;
+const MARKER_BOX_OFFSET_Y = -28;
 
 // Cluster marker characters — driven by cluster.stories.length.
 // Stay visible at every zoom level; the leader line anchors to them.
@@ -329,7 +330,7 @@ const BOROUGH_LABEL_POINTS = {
 // Layer thresholds in view.scale units. Map detail emerges as you zoom in.
 const mapLayers = {
   boroughs:     { url: "/data/nyc-boroughs.geojson",      threshold: 0,    data: null },
-  nta:          { url: "/data/nyc-neighborhoods.geojson", threshold: 1.3,  data: null },
+  nta:          { url: "/data/nyc-neighborhoods.geojson", threshold: 0,    data: null },
   parks:        { url: "/data/nyc-parks.geojson",         threshold: 1.7,  data: null },
   streetsMajor: { url: "/data/nyc-streets-major.geojson", threshold: 2.5,  data: null },
   streetsAll:   { url: "/data/nyc-streets-all.geojson",   threshold: 5.0,  data: null },
