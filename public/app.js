@@ -36,14 +36,12 @@ const INK_FAINT = "rgba(0,0,0,0.30)";   // (still used as faint accent)
 const MAP_GREY = "#c8c8c8";             // every line on the map
 const PAPER = "#fff";
 
-// Story box sizing. Cards hold off until the user has really zoomed in —
-// otherwise hundreds of dots' cards would all pile up at moderate zoom.
-// They also stay small at full zoom; the map's job at lower zoom is to show
-// markers + labels + streets, not novella-length cards.
+// Story box sizing. Cards hold off until BOX_FADE_START so dense maps don't
+// drown in overlapping boxes. Above that, each card sizes itself to fit
+// exactly the text its author wrote (plus the photo) — no zoom-based growth,
+// so cards have a stable footprint regardless of how far you zoom in.
 const BOX_PAD = 4;
-const BOX_MIN_INNER = 18;                       // inner width in screen px when box first appears
-const BOX_MAX_INNER = 80;                       // inner width in screen px at full zoom
-const BOX_FADE_START = 15;                      // box pops in only after ~15× zoom
+const BOX_FADE_START = 15;                      // cards appear only after ~15× zoom
 const MARKER_BOX_OFFSET_X = 22;
 const MARKER_BOX_OFFSET_Y = -22;
 
@@ -285,6 +283,7 @@ function ensureStoryPrepared(story) {
     img.onload = () => {
       story.photoImg = img;
       story.photoBounds = computePhotoRowBounds(img);
+      story._boxCells = null;  // photo joined → re-pick size to make room
       render();
       // If this is an unprocessed JPEG from before bg-removal existed,
       // run it through the segmenter in the background and persist.
@@ -728,6 +727,63 @@ function placeChar(grid, r, c, ch) {
   return 1;
 }
 
+// Compute the natural box size in cells for a story — sized to fit all the
+// text the user wrote plus the photo (if any). Result is cached on the
+// story object; runs once per story and again on photo load (which can
+// expand the photo region after the fact).
+function computeBoxSize(story) {
+  if (story._boxCells) return story._boxCells;
+
+  const headerName = (story.name || "").trim();
+  const headerSpot = (story.spot || "").trim();
+  const bodyChars = graphemes((story.story || "").trim());
+
+  // Total cell-width of the body (sum of grapheme widths so CJK counts as 2).
+  let bodyW = 0;
+  for (const g of bodyChars) bodyW += chCells(g);
+
+  // Header width (includes leading space + " / " separator).
+  let headerW = 1;
+  for (const g of graphemes(headerName)) headerW += chCells(g);
+  if (headerSpot) {
+    headerW += 3;
+    for (const g of graphemes(headerSpot)) headerW += chCells(g);
+  }
+
+  // Pick innerCols by text length: shorter cards stay narrow, longer cards
+  // get wider so they don't grow absurdly tall. Always at least wide enough
+  // to fit the header without truncation.
+  let innerCols;
+  if (bodyW < 30)       innerCols = 12;
+  else if (bodyW < 80)  innerCols = 16;
+  else if (bodyW < 160) innerCols = 20;
+  else                  innerCols = 24;
+  innerCols = Math.max(innerCols, Math.min(headerW, 32));
+
+  // Photo cells (if photo loaded); roughly square on screen → 2× wider in
+  // cells than tall.
+  const hasPhoto = !!story.photoImg;
+  let photoCols = 0, photoRows = 0;
+  if (hasPhoto && innerCols >= 12) {
+    photoCols = Math.max(6, Math.floor(innerCols * 0.55));
+    photoRows = Math.max(3, Math.floor(photoCols * 0.5));
+  }
+
+  // Body rows = enough cells to hold all text + photo (with a little slack
+  // for whitespace and word boundaries).
+  const slack = Math.ceil(bodyW * 0.10) + 4;
+  const cellsNeeded = bodyW + slack + photoCols * photoRows;
+  let bodyRows = Math.max(1, Math.ceil(cellsNeeded / innerCols));
+  if (hasPhoto && bodyRows < photoRows + 1) bodyRows = photoRows + 1;
+
+  // Inner rows = header + rule + body. Body-less mode (just a name tag) is
+  // intentionally not used here — every story includes its body now.
+  const innerRows = 2 + bodyRows;
+
+  story._boxCells = { innerCols, innerRows };
+  return story._boxCells;
+}
+
 // Build a 2-D char grid for one story's box. Content reveals progressively
 // with size: tiny boxes show only the name; once there's room, the spot
 // joins it in the header; large enough boxes also gain a rule + body with
@@ -864,13 +920,6 @@ function renderStories() {
 
   const boxVisible = s >= BOX_FADE_START;
 
-  // Inner width grows with zoom: BOX_MIN_INNER at BOX_FADE_START, BOX_MAX_INNER
-  // at MAX_SCALE. Curve is a gentle ease-in (s^1.4) so boxes stay small early
-  // and ramp up faster at higher zooms.
-  const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
-  const eased = Math.pow(_t, 1.4);
-  const innerMaxPx = BOX_MIN_INNER + eased * (BOX_MAX_INNER - BOX_MIN_INNER);
-
   // Marker font size ramps gently with zoom — bigger glyphs are easier to see
   // on dense maps but shouldn't overpower the box at high zoom.
   const markerSize = clamp(MARKER_FONT_BASE * Math.sqrt(s), MARKER_FONT_MIN, MARKER_FONT_MAX);
@@ -905,13 +954,9 @@ function renderStories() {
     ensureStoryPrepared(story);
     hasPhotos = true; // keep the render loop spinning while boxes are visible
 
-    // Box dimensions in cells. Cells are taller than wide on most monospace
-    // fonts, so innerRows ≈ innerCols/2 keeps the rendered box visually square.
-    // Skip the awkward innerRows=2 shape (would leave a single empty body row
-    // between the header and the bottom frame).
-    const innerCols = Math.max(6, Math.floor(innerMaxPx / cellW));
-    let innerRows = Math.max(1, Math.round(innerCols * cellW / cellH));
-    if (innerRows === 2) innerRows = 3;
+    // Box dimensions are content-driven — sized once per story to fit all
+    // its text + photo. No zoom-based scaling.
+    const { innerCols, innerRows } = computeBoxSize(story);
     const boxCols = innerCols + 2;
     const boxRows = innerRows + 2;
     const boxW = boxCols * cellW;
@@ -1545,6 +1590,7 @@ async function reprocessOldPhoto(story) {
     img.onload = () => {
       story.photoImg = img;
       story.photoBounds = computePhotoRowBounds(img);
+      story._boxCells = null;
       resolve();
     };
     img.src = newDataURL;

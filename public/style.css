@@ -104,7 +104,6 @@ html, body {
   border: 1px solid #000;
   border-radius: 0;
   transform: scaleX(-1);
-  filter: grayscale(1) contrast(1.1);
 }
 #camera-preview[hidden] { display: none; }
 
@@ -116,7 +115,6 @@ html, body {
   object-fit: cover;
   border: 1px solid #000;
   border-radius: 0;
-  filter: grayscale(1) contrast(1.1);
 }
 #camera-thumb[hidden] { display: none; }
 
