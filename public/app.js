@@ -35,16 +35,15 @@ const INK_MUTED = "rgba(0,0,0,0.55)";
 const INK_FAINT = "rgba(0,0,0,0.30)";
 const PAPER = "#fff";
 
-// Story box sizing. The inner width grows from BOX_MIN_INNER (when boxes
-// first appear at BOX_FADE_START) all the way up to BOX_MAX_INNER at MAX_SCALE.
-// Tighter floor + later threshold so boxes hold off until you've actually
-// zoomed in, then start small and grow.
+// Story box sizing. The card starts as a tiny name-tag (just a framed name)
+// and grows: header gains the spot when there's room, then a body with the
+// story when there's even more room.
 const BOX_PAD = 4;
-const BOX_MIN_INNER = 40;                       // inner width in screen px when box first appears
-const BOX_MAX_INNER = 160;                      // inner width in screen px at full zoom
+const BOX_MIN_INNER = 28;                       // inner width in screen px when box first appears
+const BOX_MAX_INNER = 140;                      // inner width in screen px at full zoom
 const BOX_FADE_START = 3.0;                     // box pops in at this scale
-const MARKER_BOX_OFFSET_X = 28;
-const MARKER_BOX_OFFSET_Y = -28;
+const MARKER_BOX_OFFSET_X = 24;
+const MARKER_BOX_OFFSET_Y = -24;
 
 // Cluster marker characters — driven by cluster.stories.length.
 // Stay visible at every zoom level; the leader line anchors to them.
@@ -59,12 +58,13 @@ const MARKER_FONT_BASE = 11;                    // base monospace size in px at 
 const MARKER_FONT_MIN  = 10;
 const MARKER_FONT_MAX  = 22;
 
-// CJK / fullwidth detection. Chars in these ranges render at ~2x the basic
-// monospace cell width (Hangul, Han, kana, fullwidth Latin, etc.), so we
-// reserve 2 grid cells for them and paint the next cell as empty filler.
+// CJK / fullwidth / emoji detection. Chars in these ranges render at ~2x the
+// basic monospace cell width, so we reserve 2 grid cells for them and paint
+// the next cell as empty filler.
 function isWideChar(ch) {
   if (!ch) return false;
   const cp = ch.codePointAt(0);
+  if (cp >= 0x1F000) return true;     // emoji + supplementary plane symbols
   return (
     (cp >= 0x1100 && cp <= 0x115F) ||
     (cp >= 0x2E80 && cp <= 0x303E) ||
@@ -76,11 +76,21 @@ function isWideChar(ch) {
     (cp >= 0xF900 && cp <= 0xFAFF) ||
     (cp >= 0xFE30 && cp <= 0xFE4F) ||
     (cp >= 0xFF00 && cp <= 0xFF60) ||
-    (cp >= 0xFFE0 && cp <= 0xFFE6)
+    (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+    (cp >= 0x2600 && cp <= 0x27BF)
   );
 }
-// Display width in cells for a single character (1 or 2).
 function chCells(ch) { return isWideChar(ch) ? 2 : 1; }
+
+// Grapheme split (so multi-codepoint emoji + Hangul stay atomic). Cached
+// because Intl.Segmenter construction isn't free.
+let _grapheme = null;
+function graphemes(text) {
+  if (!_grapheme) _grapheme = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const out = [];
+  for (const seg of _grapheme.segment(text || "")) out.push(seg.segment);
+  return out;
+}
 
 const view = { scale: 1, tx: 0, ty: 0 };
 let currentTier = "CITY";
@@ -716,11 +726,10 @@ function placeChar(grid, r, c, ch) {
   return 1;
 }
 
-// Build a 2-D char grid for one story's box. Frame, header, rule, and body
-// share the same monospace cell grid; the photo is rendered as a raster on
-// top in renderStories. portraitOcc is an optional per-body-row { colStart,
-// colEnd } in 0..innerCols-1 for cells the photo silhouette occupies — body
-// text wraps around it.
+// Build a 2-D char grid for one story's box. Content reveals progressively
+// with size: tiny boxes show only the name; once there's room, the spot
+// joins it in the header; large enough boxes also gain a rule + body with
+// the story flowing letter-by-letter around the photo silhouette.
 function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
   const boxCols = innerCols + 2;
   const boxRows = innerRows + 2;
@@ -741,49 +750,53 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
     grid[r][boxCols - 1] = "│";
   }
 
-  // Header row + rule (only if box is tall enough to bother).
-  let bodyTopR = 1;
-  const bodyBotR = boxRows - 2;
-  if (boxRows >= 5) {
-    const headParts = [];
-    if (story.name) headParts.push(story.name);
-    if (story.spot) headParts.push(story.spot);
-    const headerText = " " + headParts.join(" / ");
-    let cellsUsed = 0;
-    for (const ch of headerText) {
-      const w = chCells(ch);
-      if (cellsUsed + w > innerCols) break;
-      placeChar(grid, 1, 1 + cellsUsed, ch);
-      cellsUsed += w;
+  // Header — always render the name; add "/ spot" only when it fits in full.
+  const nameG = graphemes((story.name || "").trim());
+  const spotG = graphemes((story.spot || "").trim());
+  function widthOf(arr) { let w = 0; for (const g of arr) w += chCells(g); return w; }
+  function placeRow(r, startCol, gArr, maxCols) {
+    let c = startCol;
+    for (const g of gArr) {
+      const w = chCells(g);
+      if (c + w - 1 > startCol + maxCols - 1) break;
+      placeChar(grid, r, c, g);
+      c += w;
     }
+    return c - startCol;
+  }
+  // " name" — leading space for breathing room when there's room.
+  const leadPad = innerCols >= 4 ? 1 : 0;
+  const headerCols = innerCols - leadPad;
+  let headerCells = [];
+  const fullSep = " / ";
+  const fullW = widthOf(nameG) + (spotG.length ? widthOf(graphemes(fullSep)) + widthOf(spotG) : 0);
+  if (spotG.length && fullW <= headerCols) {
+    headerCells = [...nameG, ...graphemes(fullSep), ...spotG];
+  } else {
+    headerCells = nameG;
+  }
+  placeRow(1, 1 + leadPad, headerCells, headerCols);
+
+  // Decide whether to render a body — needs at least header + rule + 1 row + bottom.
+  let bodyTopR = -1;
+  let bodyHeight = 0;
+  if (boxRows >= 5) {
     grid[2][0] = "├";
     grid[2][boxCols - 1] = "┤";
     for (let c = 1; c < boxCols - 1; c++) grid[2][c] = "─";
     bodyTopR = 3;
+    bodyHeight = (boxRows - 2) - bodyTopR + 1;
   }
 
-  const bodyHeight = bodyBotR - bodyTopR + 1;
+  // Body — letter-by-letter (grapheme-by-grapheme) reflow around the photo.
+  // No word tokenization: characters land in cells in order, breaking
+  // wherever the available run ends. This is the "letters following the
+  // contour" look as opposed to the chunky word-wrap.
+  if (bodyHeight > 0) {
+    const chars = graphemes((story.story || "").trim());
+    let ci = 0;
 
-  // Reflow body text around the photo silhouette (when present): greedy
-  // word-fit into the cells of each body row, splitting around portraitOcc.
-  // Words are tokenized into Array.from-grapheme runs so CJK characters
-  // (each width-2) and emoji are placed atomically.
-  const bodyText = (story.story || "").trim();
-  if (bodyText) {
-    // Split into "words" by whitespace, then expand each word into an array
-    // of code points so we can measure per-char cell width and break long
-    // words mid-character if needed.
-    const tokens = bodyText.split(/\s+/).filter(Boolean).map(w => Array.from(w));
-    let wi = 0;
-    let chIn = 0;  // index into tokens[wi]
-
-    function tokenWidth(t, fromIdx) {
-      let w = 0;
-      for (let i = fromIdx; i < t.length; i++) w += chCells(t[i]);
-      return w;
-    }
-
-    for (let br = 0; br < bodyHeight && wi < tokens.length; br++) {
+    for (let br = 0; br < bodyHeight && ci < chars.length; br++) {
       const occ = portraitOcc ? portraitOcc[br] : null;
       const ranges = [];
       if (!occ) {
@@ -796,54 +809,26 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
         if (range.b < range.a) continue;
         let col = range.a;
         const colEnd = range.b;
-        while (col <= colEnd && wi < tokens.length) {
-          // Snapshot for liveness check — if neither col nor wi/chIn move,
-          // we'd loop forever (e.g. mid-word width-2 char too wide for the
-          // remaining cells in this range). Break out instead.
-          const col0 = col, wi0 = wi, chIn0 = chIn;
-
-          const tok = tokens[wi];
-          const remW = tokenWidth(tok, chIn);
-          const avail = colEnd - col + 1;
-          if (chIn === 0 && remW > avail) {
-            // Whole word doesn't fit. Hard-break only if even a full row
-            // can't hold it; otherwise leave it for the next row.
-            if (remW > innerCols) {
-              while (chIn < tok.length && col <= colEnd) {
-                const w = chCells(tok[chIn]);
-                if (col + w - 1 > colEnd) break;
-                placeChar(grid, bodyTopR + br, 1 + col, tok[chIn]);
-                col += w;
-                chIn += 1;
-              }
-            } else {
-              break;
-            }
-          } else {
-            while (chIn < tok.length) {
-              const w = chCells(tok[chIn]);
-              if (col + w - 1 > colEnd) break;
-              placeChar(grid, bodyTopR + br, 1 + col, tok[chIn]);
-              col += w;
-              chIn += 1;
-            }
-            if (chIn === tok.length) {
-              wi += 1;
-              chIn = 0;
-              if (col <= colEnd && wi < tokens.length) col += 1; // word separator
-            }
-          }
-
-          // Liveness guard: if no state advanced, give up on this range so
-          // the next range / row can take over.
-          if (col === col0 && wi === wi0 && chIn === chIn0) break;
+        let firstInRange = true;
+        while (col <= colEnd && ci < chars.length) {
+          const g = chars[ci];
+          // Eat leading whitespace at the start of a new line/range so wrapped
+          // text doesn't begin with a stranded space.
+          if (firstInRange && /^\s+$/.test(g)) { ci += 1; continue; }
+          firstInRange = false;
+          const w = chCells(g);
+          if (col + w - 1 > colEnd) break;
+          // Skip rendering whitespace cells (no glyph), but still consume them
+          // so the next range/row starts cleanly with content.
+          if (!/^\s+$/.test(g)) placeChar(grid, bodyTopR + br, 1 + col, g);
+          col += w;
+          ci += 1;
         }
       }
     }
   }
 
-  // Embed [ n/N → ] into the bottom border, right-aligned. Returns the
-  // (col, length) used so the caller can register a hit-test region.
+  // Embed [ n/N → ] into the bottom border, right-aligned.
   let arrowSpan = null;
   if (cluster.stories.length > 1) {
     const label = `[ ${cluster.activeIdx + 1}/${cluster.stories.length} → ]`;
@@ -919,10 +904,12 @@ function renderStories() {
     hasPhotos = true; // keep the render loop spinning while boxes are visible
 
     // Box dimensions in cells. Cells are taller than wide on most monospace
-    // fonts, so innerRows is set so the box renders as a visually square
-    // rectangle on screen instead of a tall column.
-    const innerCols = Math.max(8, Math.floor(innerMaxPx / cellW));
-    const innerRows = Math.max(5, Math.round(innerCols * cellW / cellH));
+    // fonts, so innerRows ≈ innerCols/2 keeps the rendered box visually square.
+    // Skip the awkward innerRows=2 shape (would leave a single empty body row
+    // between the header and the bottom frame).
+    const innerCols = Math.max(6, Math.floor(innerMaxPx / cellW));
+    let innerRows = Math.max(1, Math.round(innerCols * cellW / cellH));
+    if (innerRows === 2) innerRows = 3;
     const boxCols = innerCols + 2;
     const boxRows = innerRows + 2;
     const boxW = boxCols * cellW;
