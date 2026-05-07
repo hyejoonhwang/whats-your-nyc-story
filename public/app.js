@@ -21,58 +21,48 @@ const TIER_BLOCKS = 5.0;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 20;
 
-const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, monospace';
+const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 const FONT_SIZE = 10;
 const LINE_HEIGHT = 12;
 const FONT = `${FONT_SIZE}px ${FONT_FAMILY}`;
 
-// Post-it visual params. Each story dot gets its own paper-textured rectangle
-// with deterministic color + tilt. Post-its fade in as the user zooms from
-// CITY into BOROUGH; below that they're invisible and we fall back to the
-// existing typography-only rendering.
-const POSTIT_COLORS = [
-  "#fff0a0",  // yellow
-  "#ffc1c4",  // pink
-  "#bce8a8",  // mint
-  "#bedeed",  // sky
-  "#ffd1a3",  // orange
-  "#dcc6e8",  // lavender
-];
-const POSTIT_PAD = 3;                             // inner padding (text -> edge)
-const POSTIT_MAX_INNER = 120;                     // max post-it inner width (screen px)
-const POSTIT_FADE_START = 1.5;                    // newest post-it snaps in at this scale
-const POSTIT_STAGGER = 0.25;                      // each subsequent (older) post-it appears this many zoom units later
-const POSTIT_MAX_ROT = 5 * Math.PI / 180;         // ±5° random tilt per dot
-const POSTIT_INK = "rgba(40,40,40,0.95)";         // dark pencil/ink color on paper
-const POSTIT_TOP_PIN_R_MIN = 2.5;                 // top-of-post-it pin: min screen radius
-const POSTIT_TOP_PIN_R_MAX = 5;                   // top-of-post-it pin: max screen radius
+// Minimalist ASCII params. All story rendering happens in monospace text on a
+// pure-white canvas: thin black outlines for the map, character markers for
+// clusters, and box-drawn frames for stories. No colors, no textures, no
+// shadows — everything is text or a single-pixel black line.
+const INK = "#000";
+const INK_MUTED = "rgba(0,0,0,0.55)";
+const INK_FAINT = "rgba(0,0,0,0.30)";
+const PAPER = "#fff";
 
-// Pin-head visual params. At low zoom, each story is represented by a 3D
-// glossy pin clustered around its dot — number of pins matches story count.
-// Pins cross-fade with post-its over the same range (pin out / post-it in).
-const PIN_RADIUS_WORLD = 1.8;                     // pin radius in world units
-const PIN_RADIUS_MIN_SCREEN = 2.5;                // never below this on screen
-const PIN_RADIUS_MAX_SCREEN = 7;                  // never above this on screen
-const PIN_CLUSTER_RADIUS_WORLD = BASE_CELL * 0.5; // pins fan out within the dot footprint
-const PIN_FADE_START = POSTIT_FADE_START;                       // pins start fading exactly when the first post-it appears
-const PIN_FADE_END = POSTIT_FADE_START + 0.3;                   // pins gone shortly after the first post-it pops in
-// Empty-cell dots scale with zoom too — small dots at zoom-out so they
-// don't overshadow the pins, modest at zoom-in so the unwritten grid stays
-// visible behind post-its.
-const DOT_RADIUS_WORLD = 0.6;
-const DOT_RADIUS_MIN_SCREEN = 0.4;
-const DOT_RADIUS_MAX_SCREEN = 2.5;
+// Story box (ASCII frame) sizing in screen px. Kept on a multiple of LINE_HEIGHT
+// so the box, body text, and ASCII portrait all share the same character grid.
+const BOX_PAD = 4;                              // outer breathing room around the frame
+const BOX_MAX_INNER = 200;                      // max inner width in screen px (used to be 120 for paper post-its)
+const BOX_FADE_START = 1.5;                     // box pops in at this scale
+const MARKER_BOX_OFFSET_X = 36;                 // default screen-px offset of box from marker (upper-right)
+const MARKER_BOX_OFFSET_Y = -36;
 
-const PIN_PALETTE = [
-  { mid: "#e83a26", light: "#ffb1a0", dark: "#7c1410" }, // red
-  { mid: "#f7c920", light: "#fff4a8", dark: "#a8870a" }, // yellow
-  { mid: "#1e6dd4", light: "#7bb5ff", dark: "#0a3672" }, // blue
-  { mid: "#2ea84a", light: "#88dba0", dark: "#155a26" }, // green
-  { mid: "#f0ebde", light: "#ffffff", dark: "#a89e8a" }, // white-ish
-  { mid: "#2a2825", light: "#7a766c", dark: "#0a0908" }, // black
-  { mid: "#7a2eb8", light: "#c79be0", dark: "#3a1265" }, // purple
-  { mid: "#e8722e", light: "#ffb98a", dark: "#8c3a0e" }, // orange
-];
+// Cluster marker characters — driven by cluster.stories.length.
+// Stay visible at every zoom level; the leader line anchors to them.
+function markerCharForCount(n) {
+  if (n >= 10) return "■";
+  if (n >= 5)  return "*";
+  if (n >= 3)  return "+";
+  if (n >= 2)  return ":";
+  return "·";
+}
+const MARKER_FONT_BASE = 11;                    // base monospace size in px at scale 1
+const MARKER_FONT_MIN  = 10;
+const MARKER_FONT_MAX  = 22;
+
+// ASCII portrait ramp: dark pixels → dense chars (rightmost), light → sparse.
+// Leading space is intentional — fully transparent / very-bright cells render
+// as whitespace so body text can flow into them.
+const ASCII_RAMP = " .:-=+*#%@";
+const ASCII_ALPHA_THRESH = 28;                  // 0–255 alpha cutoff
+// Portrait cell — slightly wider than glyph cell so chars don't crash into
+// each other. We tune this against the measured cellW on first render.
 
 const view = { scale: 1, tx: 0, ty: 0 };
 let currentTier = "CITY";
@@ -252,54 +242,35 @@ function migrateIfInWater(story) {
   }
 }
 
-// Lazily prepare a single story's Pretext layout, photo, and float physics.
-// Each story now owns its own visual state (was per-dot before).
+// Lazily prepare a story's Pretext layout + load its photo. The minimalist
+// renderer doesn't use Pretext line walking on the cell grid (monospace makes
+// it trivial), but we still build a prepared form for the live-draft preview.
 function ensureStoryPrepared(story) {
   if (story.prepared) return;
-  // Single run of "name / spot / story" — Pretext handles the wrapping.
-  // Skip empty pieces so old rows without a `spot` still render cleanly.
   const fullText = [story.name, story.spot, story.story]
     .filter((p) => p && String(p).trim())
     .join(" / ");
   story.prepared = prepareWithSegments(fullText, FONT);
-  story.capW = null; // computed on first render via computeFullFitCap
 
   if (story.photo && !story.photoImg) {
     const img = new Image();
     img.src = story.photo;
     img.onload = () => {
       story.photoImg = img;
-      story.photoBounds = computePhotoRowBounds(img);
+      story._asciiCache = null;  // recomputed lazily at render time
       render();
       // If this is an unprocessed JPEG from before bg-removal existed,
       // run it through the segmenter in the background and persist.
       queuePhotoReprocess(story);
     };
   }
-
-  // Photo motion offsets in SCREEN px relative to post-it center.
-  if (!story.float) {
-    story.float = {
-      ox: (Math.random() - 0.5) * 8,
-      oy: (Math.random() - 0.5) * 8,
-      vx: (Math.random() > 0.5 ? 1 : -1) * 0.4,
-      vy: (Math.random() > 0.5 ? 1 : -1) * 0.4,
-    };
-  }
-  // Text block motion (vertical only, since text fills width).
-  if (!story.textFloat) {
-    story.textFloat = {
-      oy: (Math.random() - 0.5) * 4,
-      vy: (Math.random() > 0.5 ? 1 : -1) * 0.25,
-    };
-  }
 }
 
 // ============================================================================
-// Vintage paper map background — progressive layers based on view.scale.
-// Each lat/lon point is mapped onto the same world coordinate system as the
-// hand-drawn dot grid (stretched to fit), so the map and dots share the same
-// pan/zoom transform.
+// Map background — outline-only, B&W. Borough perimeters, NTAs, parks, and
+// streets are all drawn as black strokes on a white background. Lat/lon
+// points project onto the same world grid the markers/boxes use, so map and
+// stories share the same pan/zoom transform.
 // ============================================================================
 const MAP_WEST = -74.27, MAP_EAST = -73.68, MAP_SOUTH = 40.48, MAP_NORTH = 40.92;
 const MAP_W_DEG = MAP_EAST - MAP_WEST;
@@ -322,13 +293,6 @@ function lonLatToWorld([lon, lat]) {
   return [fx * MAP_WIDTH, MAP_TOP_PAD + fy * MAP_HEIGHT];
 }
 
-const BOROUGH_FILLS = {
-  "Manhattan":     "#e8c896",
-  "Brooklyn":      "#cdd9a4",
-  "Queens":        "#dabd84",
-  "Bronx":         "#e0b094",
-  "Staten Island": "#c4c89a",
-};
 const BOROUGH_LABEL_POINTS = {
   "Manhattan":     [-73.965, 40.789],
   "Brooklyn":      [-73.950, 40.650],
@@ -388,21 +352,6 @@ async function loadMapLayer(name) {
   }
 }
 
-let _mapPaperPattern = null;
-function ensureMapPaperPattern() {
-  if (_mapPaperPattern) return;
-  const tile = document.createElement("canvas");
-  tile.width = tile.height = 110;
-  const tx = tile.getContext("2d");
-  const img = tx.createImageData(110, 110);
-  for (let i = 0; i < img.data.length; i += 4) {
-    img.data[i + 0] = 90; img.data[i + 1] = 60; img.data[i + 2] = 25;
-    img.data[i + 3] = Math.max(0, (Math.random() - 0.55) * 70);
-  }
-  tx.putImageData(img, 0, 0);
-  _mapPaperPattern = ctx.createPattern(tile, "repeat");
-}
-
 function bboxIntersectsView(b, vb) {
   return !(b[2] < vb[0] || b[0] > vb[2] || b[3] < vb[1] || b[1] > vb[3]);
 }
@@ -445,42 +394,45 @@ function renderMapBackground() {
   const H = window.innerHeight;
   const s = view.scale;
 
-  // Aged paper background with radial gradient (lighter center).
-  const bg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.15,
-                                       W / 2, H / 2, Math.max(W, H) * 0.85);
-  bg.addColorStop(0, "#f6eed8");
-  bg.addColorStop(1, "#e3d4b0");
-  ctx.fillStyle = bg;
+  // Pure white paper.
+  ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, W, H);
 
   const vb = [-view.tx / s, -view.ty / s, (W - view.tx) / s, (H - view.ty) / s];
 
-  // Borough fills (always)
+  // Borough outlines — bold black perimeter, no fills.
   if (mapLayers.boroughs.data) {
+    ctx.save();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.1;
+    ctx.lineJoin = "round";
     for (const f of mapLayers.boroughs.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
       tracePolygonFeature(f);
-      ctx.fillStyle = BOROUGH_FILLS[f.properties.BoroName] || "#d8c8a8";
-      ctx.fill();
+      ctx.stroke();
     }
+    ctx.restore();
   }
 
-  // Parks (s > 1.7)
+  // Parks — outlined only (no fill).
   if (mapLayers.parks.data && s > mapLayers.parks.threshold) {
-    ctx.fillStyle = "rgba(135, 165, 100, 0.55)";
+    ctx.save();
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.5;
     for (const f of mapLayers.parks.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
       tracePolygonFeature(f);
-      ctx.fill();
+      ctx.stroke();
     }
+    ctx.restore();
   }
 
-  // NTA boundaries (s > 1.3) — dashed sepia
+  // NTA boundaries — thin dashed black.
   if (mapLayers.nta.data && s > mapLayers.nta.threshold) {
     ctx.save();
-    ctx.strokeStyle = "rgba(85, 50, 20, 0.30)";
-    ctx.lineWidth = 0.5;
-    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.4;
+    ctx.setLineDash([2, 3]);
     for (const f of mapLayers.nta.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
       tracePolygonFeature(f);
@@ -489,35 +441,39 @@ function renderMapBackground() {
     ctx.restore();
   }
 
-  // Major streets (s > 2.5)
+  // Major streets — thin black.
   if (mapLayers.streetsMajor.data && s > mapLayers.streetsMajor.threshold) {
-    ctx.strokeStyle = "rgba(85, 50, 20, 0.50)";
-    ctx.lineWidth = 1.4;
+    ctx.save();
+    ctx.strokeStyle = INK_MUTED;
+    ctx.lineWidth = 0.7;
     ctx.lineCap = "round";
     for (const f of mapLayers.streetsMajor.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
       traceLineFeature(f);
       ctx.stroke();
     }
+    ctx.restore();
   }
 
-  // All streets (s > 5)
+  // All streets — even thinner, more transparent.
   if (mapLayers.streetsAll.data && s > mapLayers.streetsAll.threshold) {
-    ctx.strokeStyle = "rgba(85, 50, 20, 0.32)";
-    ctx.lineWidth = 0.55;
+    ctx.save();
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.4;
     ctx.lineCap = "round";
     for (const f of mapLayers.streetsAll.data) {
       if (!bboxIntersectsView(f.bbox, vb)) continue;
       traceLineFeature(f);
       ctx.stroke();
     }
+    ctx.restore();
   }
 
-  // Borough labels — always visible, slightly bigger when zoomed in.
+  // Borough labels — monospace caps, no serif.
   ctx.save();
-  ctx.fillStyle = "rgba(75, 45, 20, 0.85)";
-  const labelSize = Math.max(13, Math.min(22, 13 * s));
-  ctx.font = `bold ${labelSize}px Georgia, "Times New Roman", serif`;
+  ctx.fillStyle = INK_MUTED;
+  const labelSize = Math.max(11, Math.min(18, 11 * s));
+  ctx.font = `${labelSize}px ${FONT_FAMILY}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const [name, lp] of Object.entries(BOROUGH_LABEL_POINTS)) {
@@ -525,148 +481,109 @@ function renderMapBackground() {
     const sx = view.tx + wx * s;
     const sy = view.ty + wy * s;
     if (sx < -100 || sx > W + 100 || sy < -50 || sy > H + 50) continue;
-    ctx.fillText(name.toUpperCase(), sx, sy);
+    // Letter-spaced for typographic emphasis.
+    const txt = name.toUpperCase().split("").join(" ");
+    ctx.fillText(txt, sx, sy);
   }
   ctx.restore();
-
-  // Paper grain overlay
-  ensureMapPaperPattern();
-  ctx.save();
-  ctx.fillStyle = _mapPaperPattern;
-  ctx.globalAlpha = 0.25;
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-
-  // Vignette
-  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45,
-                                       W / 2, H / 2, Math.max(W, H) * 0.85);
-  vg.addColorStop(0, "rgba(0,0,0,0)");
-  vg.addColorStop(1, "rgba(50, 25, 5, 0.32)");
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
 }
 
 // ============================================================================
-// Corkboard intro panel — fixed in screen space (does NOT pan or zoom).
-// Sits at the top-left of the viewport with two pinned papers: a title
-// and a personal note about what the project is.
+// ASCII intro panel — fixed in screen space, upper-left of the viewport.
+// Pure box-drawn frame with three sections: title / personal note / how-to.
+// Drawn cell-by-cell at INTRO_LH line height in monospace.
 // ============================================================================
-const CORK_SX = 24;       // screen-space top-left position
-const CORK_SY = 60;
-const CORK_SW = 180;      // screen-space size (fixed, no scaling)
-const CORK_SH = 410;      // taller now to fit the how-to paper
+const INTRO_X = 24;
+const INTRO_Y = 24;
+const INTRO_FONT_SIZE = 11;
+const INTRO_LH = 14;
+const INTRO_COLS = 30;       // total width in chars (incl. side borders)
 
-function renderCorkboard() {
-  const sx = CORK_SX, sy = CORK_SY, sw = CORK_SW, sh = CORK_SH;
+function repeat(ch, n) { return n > 0 ? new Array(n + 1).join(ch) : ""; }
 
-  ctx.save();
-
-  // Cork board with drop shadow
-  ctx.shadowColor = "rgba(0,0,0,0.4)";
-  ctx.shadowBlur = 6;
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 4;
-  ctx.fillStyle = "#a87146";
-  ctx.fillRect(sx, sy, sw, sh);
-  ctx.shadowColor = "transparent";
-
-  // Cork grain
-  ensureMapPaperPattern();
-  if (_mapPaperPattern) {
-    ctx.save();
-    ctx.fillStyle = _mapPaperPattern;
-    ctx.globalAlpha = 0.55;
-    ctx.fillRect(sx, sy, sw, sh);
-    ctx.restore();
-  }
-
-  // Dark wooden frame
-  ctx.strokeStyle = "#3a2615";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(sx + 1, sy + 1, sw - 2, sh - 2);
-
-  // Title paper
-  _drawCorkPaperFixed(sx + 18, sy + 12, 145, 50, -0.05, "#fef8df", [
-    { text: "What's Your", size: 13, weight: "bold",        fam: "Georgia, serif" },
-    { text: "NYC Story?",  size: 15, weight: "italic bold", fam: "Georgia, serif" },
-  ]);
-
-  // Personal note paper
-  _drawCorkPaperFixed(sx + 12, sy + 76, 155, 142, 0.035, "#f4ebd4", [
-    { text: "everyone has their",   size: 9 },
-    { text: "own version of nyc —", size: 9 },
-    { text: "on every corner,",     size: 9 },
-    { text: "in every building.",   size: 9 },
-    { text: "",                     size: 4 },
-    { text: "we live in the same",  size: 9 },
-    { text: "city, but is it",      size: 9 },
-    { text: "really the same?",     size: 9 },
-    { text: "",                     size: 4 },
-    { text: "i'd love to know",     size: 9 },
-    { text: "what nyc means to",    size: 9 },
-    { text: "you, and what",        size: 9 },
-    { text: "stories you hold.",    size: 9 },
-  ]);
-
-  // How-to paper
-  _drawCorkPaperFixed(sx + 14, sy + 230, 152, 168, -0.03, "#ffeac9", [
-    { text: "how to leave a",       size: 9, weight: "bold" },
-    { text: "story:",               size: 9, weight: "bold" },
-    { text: "",                     size: 4 },
-    { text: "1. zoom in and click", size: 9 },
-    { text: "   the spot where",    size: 9 },
-    { text: "   your story lives.", size: 9 },
-    { text: "",                     size: 3 },
-    { text: "2. write your name,",  size: 9 },
-    { text: "   the place, and",    size: 9 },
-    { text: "   what happened.",    size: 9 },
-    { text: "",                     size: 3 },
-    { text: "3. take a quick",      size: 9 },
-    { text: "   selfie.",           size: 9 },
-    { text: "",                     size: 3 },
-    { text: "4. hit 'leave your",   size: 9 },
-    { text: "   story here.'",      size: 9 },
-  ]);
-
-  ctx.restore();
+// Pads to width and inserts inside a row: "│ text          │"
+function introRow(text) {
+  const inner = INTRO_COLS - 2;
+  const t = (text || "").slice(0, inner);
+  return "│" + t + repeat(" ", inner - t.length) + "│";
 }
 
-function _drawCorkPaperFixed(sx, sy, sw, sh, tilt, color, lines) {
+// Section separator: ├──────────────┤
+function introRule() {
+  return "├" + repeat("─", INTRO_COLS - 2) + "┤";
+}
+
+function buildIntroLines() {
+  const lines = [];
+  // Top frame
+  lines.push("┌" + repeat("─", INTRO_COLS - 2) + "┐");
+  // Title block — letter-spaced caps centered.
+  const title = "WHAT'S YOUR NYC STORY";
+  const padL = Math.floor((INTRO_COLS - 2 - title.length) / 2);
+  lines.push(introRow(repeat(" ", padL) + title));
+  lines.push(introRule());
+
+  // Personal note section
+  lines.push(introRow(""));
+  lines.push(introRow(" everyone has their"));
+  lines.push(introRow(" own version of nyc —"));
+  lines.push(introRow(" on every corner,"));
+  lines.push(introRow(" in every building."));
+  lines.push(introRow(""));
+  lines.push(introRow(" we live in the same"));
+  lines.push(introRow(" city, but is it"));
+  lines.push(introRow(" really the same?"));
+  lines.push(introRow(""));
+  lines.push(introRow(" i'd love to know"));
+  lines.push(introRow(" what nyc means to"));
+  lines.push(introRow(" you, and what"));
+  lines.push(introRow(" stories you hold."));
+  lines.push(introRow(""));
+  lines.push(introRule());
+
+  // How-to section
+  lines.push(introRow(""));
+  lines.push(introRow(" HOW TO LEAVE A STORY"));
+  lines.push(introRow(""));
+  lines.push(introRow(" 1. zoom in and click"));
+  lines.push(introRow("    where your story"));
+  lines.push(introRow("    lives."));
+  lines.push(introRow(""));
+  lines.push(introRow(" 2. write your name,"));
+  lines.push(introRow("    the place, and"));
+  lines.push(introRow("    what happened."));
+  lines.push(introRow(""));
+  lines.push(introRow(" 3. take a selfie."));
+  lines.push(introRow(""));
+  lines.push(introRow(" 4. hit"));
+  lines.push(introRow("    [ leave it here ]"));
+  lines.push(introRow(""));
+  // Bottom frame
+  lines.push("└" + repeat("─", INTRO_COLS - 2) + "┘");
+  return lines;
+}
+
+const _INTRO_LINES = buildIntroLines();
+
+function renderIntroPanel() {
   ctx.save();
-  ctx.translate(sx + sw / 2, sy + sh / 2);
-  ctx.rotate(tilt);
+  ctx.font = `${INTRO_FONT_SIZE}px ${FONT_FAMILY}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
 
-  // Paper with drop shadow
-  ctx.shadowColor = "rgba(0,0,0,0.4)";
-  ctx.shadowBlur = 4;
-  ctx.shadowOffsetX = 1;
-  ctx.shadowOffsetY = 3;
-  ctx.fillStyle = color;
-  ctx.fillRect(-sw / 2, -sh / 2, sw, sh);
-  ctx.shadowColor = "transparent";
+  // Knock out a white background so map outlines underneath don't bleed
+  // through the panel — keeps the ASCII art crisp.
+  const cw = ctx.measureText("M").width;
+  const panelW = INTRO_COLS * cw + 4;
+  const panelH = _INTRO_LINES.length * INTRO_LH + 4;
+  ctx.fillStyle = PAPER;
+  ctx.fillRect(INTRO_X - 2, INTRO_Y - 2, panelW, panelH);
 
-  // Small pin at top center
-  const pinR = 4;
-  const pinColorIdx = (Math.round(sx + sy)) % PIN_PALETTE.length;
-  drawPin(0, -sh / 2 + pinR + 2, pinR, PIN_PALETTE[pinColorIdx], 1);
-
-  // Text lines (vertically centered, fixed font sizes)
-  ctx.fillStyle = "rgba(50, 30, 10, 0.92)";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-
-  let totalH = 0;
-  for (const ln of lines) totalH += ln.size * 1.25;
-  let y = -totalH / 2;
-  for (const ln of lines) {
-    const lineH = ln.size * 1.25;
-    if (ln.text) {
-      const weight = ln.weight ? ln.weight + " " : "";
-      const fam = ln.fam || "ui-monospace, monospace";
-      ctx.font = `${weight}${ln.size}px ${fam}`;
-      ctx.fillText(ln.text, 0, y + lineH / 2);
-    }
-    y += lineH;
+  ctx.fillStyle = INK;
+  let y = INTRO_Y;
+  for (const line of _INTRO_LINES) {
+    ctx.fillText(line, INTRO_X, y);
+    y += INTRO_LH;
   }
   ctx.restore();
 }
@@ -680,77 +597,72 @@ function render() {
 
   const s = view.scale;
 
-  const worldMinX = -view.tx / s;
-  const worldMinY = -view.ty / s;
-  const worldMaxX = worldMinX + W / s;
-  const worldMaxY = worldMinY + H / s;
-  const colMin = Math.max(0, Math.floor(worldMinX / BASE_CELL) - 1);
-  const colMax = Math.min(COLS, Math.ceil(worldMaxX / BASE_CELL) + 1);
-  const rowMin = Math.max(0, Math.floor(worldMinY / BASE_CELL) - 1);
-  const rowMax = Math.min(ROWS, Math.ceil(worldMaxY / BASE_CELL) + 1);
-
-  // No empty-dot grid anymore — pins and post-its are placed at the exact
-  // world coordinates of each click, so there's no underlying grid to draw.
   renderStories();
-
   renderDrafts();
   renderPeerCursors();
 
-  // Corkboard intro panel — drawn last so it overlays everything except HUD.
-  renderCorkboard();
+  // ASCII intro panel — last so it overlays everything except HUD.
+  renderIntroPanel();
 
-  // HUD.
-  ctx.fillStyle = "rgba(75, 45, 20, 0.7)";
+  // HUD — minimalist black on white.
+  ctx.fillStyle = INK_MUTED;
   ctx.font = `11px ${FONT_FAMILY}`;
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
   ctx.fillText(`${currentTier}  ·  ${s.toFixed(2)}x  ·  ${stories.length} stories`, 12, H - 14);
 }
 
-// Photo thumbnail size (screen px).
-const PHOTO_SIZE = 70;
-const PHOTO_ALPHA_THRESHOLD = 30;   // pixels with alpha above this count as "figure"
+// ============================================================================
+// ASCII portrait — convert a transparent PNG into a char grid that renders as
+// part of the story's text body. Per-row column bounds let body text reflow
+// around the silhouette so everything stays as text.
+// ============================================================================
 
-// Pre-compute per-row left/right opaque bounds of a photo's alpha channel,
-// so text can flow around the actual figure silhouette (not just the bbox).
-// Returns an array of length PHOTO_SIZE; each entry is null (empty row) or
-// { leftX, rightX } in photo-local pixel coords.
-function computePhotoRowBounds(img) {
+// Sample the source image at (charsW × charsH), then for each cell pick a char
+// from ASCII_RAMP based on darkness; transparent cells become spaces. Returns
+// { grid: char[][], rowBounds: ({left,right}|null)[] }. Cached on the story
+// object so we only recompute when the cell dimensions change (i.e. on zoom).
+function getOrComputeAsciiPortrait(story, charsW, charsH) {
+  if (!story.photoImg) return null;
+  const cache = story._asciiCache;
+  if (cache && cache.charsW === charsW && cache.charsH === charsH) return cache;
+
   const c = document.createElement("canvas");
-  c.width = c.height = PHOTO_SIZE;
+  c.width = charsW; c.height = charsH;
   const cx = c.getContext("2d");
-  cx.drawImage(img, 0, 0, PHOTO_SIZE, PHOTO_SIZE);
-  const data = cx.getImageData(0, 0, PHOTO_SIZE, PHOTO_SIZE).data;
-  const out = new Array(PHOTO_SIZE);
-  for (let y = 0; y < PHOTO_SIZE; y++) {
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = "high";
+  cx.drawImage(story.photoImg, 0, 0, charsW, charsH);
+  const data = cx.getImageData(0, 0, charsW, charsH).data;
+
+  const grid = new Array(charsH);
+  const rowBounds = new Array(charsH);
+  for (let y = 0; y < charsH; y++) {
+    const row = new Array(charsW);
     let l = -1, r = -1;
-    for (let x = 0; x < PHOTO_SIZE; x++) {
-      if (data[(y * PHOTO_SIZE + x) * 4 + 3] > PHOTO_ALPHA_THRESHOLD) {
+    for (let x = 0; x < charsW; x++) {
+      const i = (y * charsW + x) * 4;
+      const a = data[i + 3];
+      if (a < ASCII_ALPHA_THRESH) {
+        row[x] = " ";
+      } else {
+        const r0 = data[i], g0 = data[i + 1], b0 = data[i + 2];
+        // 0..1 luminance, perceptual weighting.
+        const lum = (0.299 * r0 + 0.587 * g0 + 0.114 * b0) / 255;
+        // Brighter pixel → lighter char. We map [0..1] luminance to a ramp
+        // index in [1 .. RAMP.length-1] (skip pure space; opaque means present).
+        const idx = Math.max(1, Math.floor((1 - lum) * (ASCII_RAMP.length - 1)));
+        row[x] = ASCII_RAMP[idx];
         if (l === -1) l = x;
         r = x;
       }
     }
-    out[y] = l === -1 ? null : { leftX: l, rightX: r };
+    grid[y] = row;
+    rowBounds[y] = l === -1 ? null : { left: l, right: r };
   }
-  return out;
-}
 
-// Returns the union of opaque-pixel x-bounds across the rows that overlap a
-// text line spanning [lineY, lineY + lineH] (post-it local coords). Returns
-// null if the line doesn't overlap any opaque rows.
-function getPhotoOccupiedRange(bounds, photoX, photoY, lineY, lineH) {
-  const yStart = Math.max(0, Math.floor(lineY - photoY));
-  const yEnd = Math.min(PHOTO_SIZE, Math.ceil(lineY + lineH - photoY));
-  if (yEnd <= yStart) return null;
-  let leftX = Infinity, rightX = -Infinity;
-  for (let y = yStart; y < yEnd; y++) {
-    const b = bounds[y];
-    if (!b) continue;
-    if (b.leftX < leftX) leftX = b.leftX;
-    if (b.rightX > rightX) rightX = b.rightX;
-  }
-  if (leftX === Infinity) return null;
-  return { pLeft: photoX + leftX - 2, pRight: photoX + rightX + 2 };
+  story._asciiCache = { charsW, charsH, grid, rowBounds };
+  return story._asciiCache;
 }
 
 // Cache character widths to avoid expensive measureText calls every frame.
@@ -779,6 +691,150 @@ function storySeed(story) {
 const clusterArrowHits = [];
 const ARROW_HIT_RADIUS = 12;
 
+// Build a 2-D char grid for one story's box. Frame, header, rule, ASCII
+// portrait, and word-wrapped body all live on the same monospace cell grid.
+function buildStoryGrid(story, cluster, innerCols, innerRows) {
+  const boxCols = innerCols + 2;
+  const boxRows = innerRows + 2;
+  const grid = new Array(boxRows);
+  for (let r = 0; r < boxRows; r++) grid[r] = new Array(boxCols).fill(" ");
+
+  // Frame
+  grid[0][0] = "┌";
+  grid[0][boxCols - 1] = "┐";
+  grid[boxRows - 1][0] = "└";
+  grid[boxRows - 1][boxCols - 1] = "┘";
+  for (let c = 1; c < boxCols - 1; c++) {
+    grid[0][c] = "─";
+    grid[boxRows - 1][c] = "─";
+  }
+  for (let r = 1; r < boxRows - 1; r++) {
+    grid[r][0] = "│";
+    grid[r][boxCols - 1] = "│";
+  }
+
+  // Header row + rule (only if box is tall enough to bother).
+  let bodyTopR = 1;
+  let bodyBotR = boxRows - 2;
+  if (boxRows >= 5) {
+    const headParts = [];
+    if (story.name) headParts.push(story.name);
+    if (story.spot) headParts.push(story.spot);
+    let headerText = " " + headParts.join(" / ");
+    if (headerText.length > innerCols) headerText = headerText.slice(0, innerCols - 1) + "…";
+    for (let i = 0; i < headerText.length && i < innerCols; i++) {
+      grid[1][1 + i] = headerText[i];
+    }
+    grid[2][0] = "├";
+    grid[2][boxCols - 1] = "┤";
+    for (let c = 1; c < boxCols - 1; c++) grid[2][c] = "─";
+    bodyTopR = 3;
+  }
+
+  const bodyHeight = bodyBotR - bodyTopR + 1;
+
+  // Place ASCII portrait in body region, centered. pRows is roughly half of
+  // pCols because monospace cells are about twice as tall as they are wide,
+  // so a 12×6 char grid renders as a ~square portrait on screen.
+  let portraitOcc = null;
+  if (story.photoImg && bodyHeight >= 4 && innerCols >= 12) {
+    const pCols = clamp(Math.floor(innerCols * 0.55), 6, 30);
+    const pRows = clamp(Math.round(pCols * 0.5), 3, bodyHeight - 1);
+    const portrait = getOrComputeAsciiPortrait(story, pCols, pRows);
+    if (portrait) {
+      const pColStart = Math.floor((innerCols - pCols) / 2);
+      const pRowStart = Math.floor((bodyHeight - pRows) / 2);
+      portraitOcc = new Array(bodyHeight).fill(null);
+      for (let pr = 0; pr < pRows; pr++) {
+        const rowChars = portrait.grid[pr];
+        for (let pc = 0; pc < pCols; pc++) {
+          const ch = rowChars[pc];
+          if (ch !== " ") {
+            grid[bodyTopR + pRowStart + pr][1 + pColStart + pc] = ch;
+          }
+        }
+        const b = portrait.rowBounds[pr];
+        if (b) {
+          portraitOcc[pRowStart + pr] = {
+            colStart: pColStart + b.left,
+            colEnd:   pColStart + b.right,
+          };
+        }
+      }
+    }
+  }
+
+  // Reflow body text around the portrait silhouette: greedy word-fit into the
+  // remaining cells of each body row. With monospace, char count = pixel width,
+  // so this stays straightforward; Pretext's prepared form would buy us nothing
+  // extra on a cell grid.
+  const bodyText = (story.story || "").trim();
+  if (bodyText) {
+    const words = bodyText.split(/\s+/);
+    let wi = 0;
+    let charInWord = 0;
+    for (let br = 0; br < bodyHeight && wi < words.length; br++) {
+      const occ = portraitOcc ? portraitOcc[br] : null;
+      // Compute available col ranges (in 0..innerCols-1).
+      const ranges = [];
+      if (!occ) {
+        ranges.push({ a: 0, b: innerCols - 1 });
+      } else {
+        if (occ.colStart > 0)            ranges.push({ a: 0,             b: occ.colStart - 2 });
+        if (occ.colEnd < innerCols - 1)  ranges.push({ a: occ.colEnd + 2, b: innerCols - 1 });
+      }
+      for (const range of ranges) {
+        if (range.b < range.a) continue;
+        let col = range.a;
+        const colEnd = range.b;
+        while (col <= colEnd && wi < words.length) {
+          const word = words[wi];
+          const remaining = word.slice(charInWord);
+          const avail = colEnd - col + 1;
+          if (charInWord === 0 && remaining.length > avail) {
+            // Would wrap — but if the word exceeds even the full innerCols
+            // width, hard-break into chunks; otherwise let it land on the
+            // next row.
+            if (remaining.length > innerCols) {
+              for (let k = 0; k < avail; k++) grid[bodyTopR + br][1 + col + k] = remaining[k];
+              charInWord += avail;
+              col = colEnd + 1;
+            } else {
+              break;
+            }
+          } else {
+            const toPlace = Math.min(remaining.length, avail);
+            for (let k = 0; k < toPlace; k++) grid[bodyTopR + br][1 + col + k] = remaining[k];
+            col += toPlace;
+            if (toPlace === remaining.length) {
+              wi += 1;
+              charInWord = 0;
+              if (col <= colEnd && wi < words.length) col += 1; // word separator
+            } else {
+              charInWord += toPlace;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Embed [ n/N → ] into the bottom border, right-aligned. Returns the
+  // (col, length) used so the caller can register a hit-test region.
+  let arrowSpan = null;
+  if (cluster.stories.length > 1) {
+    const label = `[ ${cluster.activeIdx + 1}/${cluster.stories.length} → ]`;
+    const need = label.length;
+    if (need + 4 <= boxCols) {
+      const startCol = boxCols - 1 - need - 1;
+      for (let i = 0; i < need; i++) grid[boxRows - 1][startCol + i] = label[i];
+      arrowSpan = { col: startCol, len: need };
+    }
+  }
+
+  return { grid, arrowSpan };
+}
+
 function renderStories() {
   const s = view.scale;
   hasPhotos = false;
@@ -787,221 +843,132 @@ function renderStories() {
   ctx.font = FONT;
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
+  const cellW = ctx.measureText("M").width;
+  const cellH = LINE_HEIGHT;
 
-  // View bbox in world coords (with a small margin) for off-screen culling.
   const W = window.innerWidth, H = window.innerHeight;
   const vbMinX = -view.tx / s - 60;
   const vbMaxX = (W - view.tx) / s + 60;
   const vbMinY = -view.ty / s - 60;
   const vbMaxY = (H - view.ty) / s + 60;
 
-  const pinAlpha = clamp(
-    1 - (s - PIN_FADE_START) / (PIN_FADE_END - PIN_FADE_START), 0, 1);
-  const postitVisible = s >= POSTIT_FADE_START;
-  const pinScreenR = clamp(PIN_RADIUS_WORLD * s, PIN_RADIUS_MIN_SCREEN, PIN_RADIUS_MAX_SCREEN);
-  const topPinR = clamp(s * 0.7, POSTIT_TOP_PIN_R_MIN, POSTIT_TOP_PIN_R_MAX);
+  const boxVisible = s >= BOX_FADE_START;
 
-  // Post-it grows linearly across the entire visible zoom range:
-  // size = LINE_HEIGHT at POSTIT_FADE_START → POSTIT_MAX_INNER at MAX_SCALE.
-  const _t = clamp((s - POSTIT_FADE_START) / (MAX_SCALE - POSTIT_FADE_START), 0, 1);
-  const innerMax = LINE_HEIGHT + _t * (POSTIT_MAX_INNER - LINE_HEIGHT);
+  // Inner width grows linearly with zoom from a small minimum to BOX_MAX_INNER.
+  // Cap to a multiple of cellW so the frame aligns cleanly with the char grid.
+  const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
+  const innerMaxPx = Math.max(cellW * 14, cellW * 14 + _t * (BOX_MAX_INNER - cellW * 14));
+
+  // Marker font size ramps gently with zoom — bigger glyphs are easier to see
+  // on dense maps but shouldn't overpower the box at high zoom.
+  const markerSize = clamp(MARKER_FONT_BASE * Math.sqrt(s), MARKER_FONT_MIN, MARKER_FONT_MAX);
 
   for (let ci = 0; ci < clusters.length; ci++) {
     const cluster = clusters[ci];
-    // Apply in-memory drag offset (resets to 0 on refresh).
-    const effectiveWx = cluster.wx + (cluster.dx || 0);
-    const effectiveWy = cluster.wy + (cluster.dy || 0);
-    if (effectiveWx < vbMinX || effectiveWx > vbMaxX) continue;
-    if (effectiveWy < vbMinY || effectiveWy > vbMaxY) continue;
+    if (cluster.wx < vbMinX || cluster.wx > vbMaxX) continue;
+    if (cluster.wy < vbMinY || cluster.wy > vbMaxY) continue;
+
+    // Marker at cluster anchor (always rendered, every zoom level).
+    const mx = view.tx + cluster.wx * s;
+    const my = view.ty + cluster.wy * s;
+    const markerCh = markerCharForCount(cluster.stories.length);
+
+    ctx.save();
+    ctx.font = `${markerSize}px ${FONT_FAMILY}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    // Knock out a little white halo so the marker stays legible over street
+    // hatching at full zoom.
+    ctx.fillStyle = PAPER;
+    const halo = markerSize * 0.45;
+    ctx.fillRect(mx - halo, my - halo, halo * 2, halo * 2);
+    ctx.fillStyle = INK;
+    ctx.fillText(markerCh, mx, my);
+    ctx.restore();
+
+    if (!boxVisible) continue;
 
     const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
     if (!story) continue;
-
-    const cx = view.tx + effectiveWx * s;
-    const cy = view.ty + effectiveWy * s;
-
-    const seed = storySeed(story);
-    const pinPaletteIdx = Math.floor(seed * PIN_PALETTE.length);
-    const tilt = (seed - 0.5) * 2 * POSTIT_MAX_ROT;
-    const colorIdx = Math.floor(((seed * 7.31) % 1) * POSTIT_COLORS.length);
-    const postitColor = POSTIT_COLORS[colorIdx];
-    const topPinColor = PIN_PALETTE[Math.floor(((seed * 13.7) % 1) * PIN_PALETTE.length)];
-
-    // Pin (zoom-out marker). Fades out as zoom crosses POSTIT_FADE_START.
-    if (pinAlpha > 0) {
-      drawPin(cx, cy, pinScreenR, PIN_PALETTE[pinPaletteIdx], pinAlpha);
-    }
-
-    if (!postitVisible) continue;
-
     ensureStoryPrepared(story);
-    story.boxW = innerMax;
-    story.boxH = innerMax;
+    hasPhotos = true; // keep the render loop spinning while boxes are visible
 
-    const showPhoto = story.photoImg && story.boxW > PHOTO_SIZE + 20;
-    if (showPhoto) hasPhotos = true;
-    // Even without a photo we want the render loop running so text drifts.
-    hasPhotos = hasPhotos || true;
+    // Box dimensions in cells. Cells are taller than wide on most monospace
+    // fonts (cellW≈6, cellH=12), so innerRows is set so the box renders as a
+    // visually square rectangle on screen instead of a tall column.
+    const innerCols = Math.max(14, Math.floor(innerMaxPx / cellW));
+    const innerRows = Math.max(8, Math.round(innerCols * cellW / cellH));
+    const boxCols = innerCols + 2;
+    const boxRows = innerRows + 2;
+    const boxW = boxCols * cellW;
+    const boxH = boxRows * cellH;
 
-    const postitFullW = story.boxW + POSTIT_PAD * 2;
-    const postitFullH = story.boxH + POSTIT_PAD * 2;
+    // Box screen-space top-left: marker + screen offset + drag offset (world × s).
+    const dragSx = (cluster.dx || 0) * s;
+    const dragSy = (cluster.dy || 0) * s;
+    let boxLeft = mx + MARKER_BOX_OFFSET_X + dragSx;
+    let boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - boxH;
+    // (offset puts the bottom-left corner near marker; subtract boxH so the
+    //  whole box sits up-and-right of the marker.)
 
-    // Underneath post-its (the rest of the stack) peek out at small random
-    // offsets behind the active one — paper backdrops only, no content.
-    if (cluster.stories.length > 1) {
-      const stackToShow = Math.min(3, cluster.stories.length - 1);
-      const offsetMag = postitFullW * 0.06;
-      for (let d = stackToShow; d >= 1; d--) {
-        const otherIdx = (cluster.activeIdx + d) % cluster.stories.length;
-        const otherStory = cluster.stories[otherIdx];
-        const oSeed = storySeed(otherStory);
-        const oTilt = (oSeed - 0.5) * 2 * POSTIT_MAX_ROT;
-        const oCol = POSTIT_COLORS[Math.floor(((oSeed * 7.31) % 1) * POSTIT_COLORS.length)];
-        const oOx = (((oSeed * 13.7) % 1) - 0.5) * offsetMag * 2 * d;
-        const oOy = (((oSeed * 23.1) % 1) - 0.5) * offsetMag * 2 * d;
-        ctx.save();
-        ctx.translate(cx + oOx, cy + oOy);
-        ctx.rotate(oTilt);
-        drawPostitBackdrop(postitFullW, postitFullH, oCol, 1);
-        ctx.restore();
-      }
-    }
+    // Build content
+    const { grid, arrowSpan } = buildStoryGrid(story, cluster, innerCols, innerRows);
 
+    // White background knock-out for crisp ASCII over the map.
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(boxLeft - 1, boxTop - 1, boxW + 2, boxH + 2);
+
+    // Leader line from marker to nearest point on the box AABB.
+    const lx = clamp(mx, boxLeft, boxLeft + boxW);
+    const ly = clamp(my, boxTop, boxTop + boxH);
     ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(tilt);
-
-    drawPostitBackdrop(postitFullW, postitFullH, postitColor, 1);
-
-    // Clip everything that follows (photo + text) to the post-it's INNER
-    // area so it can never bleed past the paper edge.
-    ctx.save();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 0.8;
     ctx.beginPath();
-    ctx.rect(-story.boxW / 2, -story.boxH / 2, story.boxW, story.boxH);
-    ctx.clip();
+    ctx.moveTo(mx, my);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+    ctx.restore();
 
-    // Photo physics: bounds in screen px relative to post-it center.
-    let photoLocalX = 0, photoLocalY = 0;
-    if (showPhoto) {
-      const f = story.float;
-      const maxOx = (story.boxW - PHOTO_SIZE) / 2 - 4;
-      const maxOy = (story.boxH - PHOTO_SIZE) / 2 - 4;
-      if (maxOx > 0 && maxOy > 0) {
-        f.ox += f.vx;
-        f.oy += f.vy;
-        if (f.ox < -maxOx || f.ox > maxOx) { f.vx *= -1; f.ox = clamp(f.ox, -maxOx, maxOx); }
-        if (f.oy < -maxOy || f.oy > maxOy) { f.vy *= -1; f.oy = clamp(f.oy, -maxOy, maxOy); }
-      } else {
-        f.ox = 0; f.oy = 0;
-      }
-      photoLocalX = f.ox - PHOTO_SIZE / 2;
-      photoLocalY = f.oy - PHOTO_SIZE / 2;
-      ctx.drawImage(story.photoImg, photoLocalX, photoLocalY, PHOTO_SIZE, PHOTO_SIZE);
-    }
-
-    // Text layout (Pretext).
-    const maxLines = Math.max(1, Math.floor(story.boxH / LINE_HEIGHT));
-    const lines = [];
-    walkLineRanges(story.prepared, story.boxW, (line) => {
-      if (lines.length < maxLines) lines.push(materializeLineRange(story.prepared, line));
-    });
-    const blockH = lines.length * LINE_HEIGHT;
-
-    // Text stays put (only photos drift).
-    const textBlockLeft = -story.boxW / 2;
-    let y = -blockH / 2;
-
-    ctx.fillStyle = "rgba(40,40,40,0.95)";
+    // Render the grid row-by-row.
+    ctx.save();
     ctx.font = FONT;
+    ctx.fillStyle = INK;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-
-    for (const line of lines) {
-      // Per-line obstacle: prefer the photo's actual silhouette (alpha
-      // bounds) when available; fall back to the bbox for old JPEG photos
-      // and during the brief moment between photo load and bounds compute.
-      let pLeft = null, pRight = null;
-      if (showPhoto) {
-        if (story.photoBounds) {
-          const r = getPhotoOccupiedRange(story.photoBounds, photoLocalX,
-                                          photoLocalY, y, LINE_HEIGHT);
-          if (r) { pLeft = r.pLeft; pRight = r.pRight; }
-        } else if (y + LINE_HEIGHT > photoLocalY && y < photoLocalY + PHOTO_SIZE) {
-          pLeft = photoLocalX - 2;
-          pRight = photoLocalX + PHOTO_SIZE + 2;
-        }
-      }
-
-      let lx = textBlockLeft;
-      if (pLeft != null) {
-        let inRightRegion = false;
-        for (const ch of line.text) {
-          const cw = getCharWidth(ch);
-          if (!inRightRegion && lx + cw > pLeft) {
-            lx = pRight;
-            inRightRegion = true;
-          }
-          ctx.fillText(ch, lx, y);
-          lx += cw;
-        }
-      } else {
-        for (const ch of line.text) {
-          const cw = getCharWidth(ch);
-          ctx.fillText(ch, lx, y);
-          lx += cw;
-        }
-      }
-      y += LINE_HEIGHT;
+    let yy = boxTop;
+    for (const row of grid) {
+      ctx.fillText(row.join(""), boxLeft, yy);
+      yy += cellH;
     }
-
-    // Arrow + count rendered as text (still inside clip — FONT + style match
-    // the body text exactly, so it reads as one continuous typographic system).
-    if (cluster.stories.length > 1) {
-      const labelRight = story.boxW / 2 - 2;
-      const labelBottom = story.boxH / 2 - 2;
-      const aabb = drawArrowLabel(labelRight, labelBottom,
-                                  cluster.stories.length, cluster.activeIdx);
-      clusterArrowHits.push({ cluster, cx, cy, tilt, aabb });
-    }
-
-    ctx.restore();  // exit clip — pin lives at the post-it's edge
-
-    // Top ball-head pin holding the post-it down.
-    const pinTopY = -postitFullH / 2 + topPinR + 2;
-    drawPin(0, pinTopY, topPinR, topPinColor, 1);
-
     ctx.restore();
+
+    // Hit-test rect for the box (drag/drag-detect uses this).
+    cluster._boxRect = { x: boxLeft, y: boxTop, w: boxW, h: boxH };
+
+    // Arrow click zone: the [n/N →] span on the bottom border.
+    if (arrowSpan) {
+      clusterArrowHits.push({
+        cluster,
+        aabb: {
+          x: boxLeft + arrowSpan.col * cellW,
+          y: boxTop + (boxRows - 1) * cellH,
+          w: arrowSpan.len * cellW,
+          h: cellH,
+        },
+      });
+    }
   }
 }
 
-// Renders the "n/N →" indicator as plain monospace text (using FONT, the
-// same as the story body) so it blends in seamlessly. Returns the AABB of
-// the rendered text in the local rotated frame, for click hit-testing.
-function drawArrowLabel(rightX, bottomY, total, currentIdx) {
-  const label = `${currentIdx + 1}/${total} →`;
-  ctx.fillStyle = "rgba(40,40,40,0.95)";
-  ctx.font = FONT;
-  ctx.textAlign = "right";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(label, rightX, bottomY);
-  const w = ctx.measureText(label).width;
-  return { x: rightX - w, y: bottomY - LINE_HEIGHT, w, h: LINE_HEIGHT };
-}
-
-// Returns true if the screen click hit any arrow label; advances that
-// cluster's activeIdx and re-renders. Hit area is the label's AABB
-// (slightly inflated so finger taps work) in the rotated post-it frame.
+// True if a screen click hit any arrow region (the [ n/N → ] embedded in a
+// bottom border). Cycles activeIdx and re-renders if so.
 function handleArrowClick(sx, sy) {
   const PAD = 4;
   for (const a of clusterArrowHits) {
-    const dx = sx - a.cx;
-    const dy = sy - a.cy;
-    const c = Math.cos(a.tilt), si = Math.sin(a.tilt);
-    const lx = dx * c + dy * si;
-    const ly = -dx * si + dy * c;
     const b = a.aabb;
-    if (lx >= b.x - PAD && lx <= b.x + b.w + PAD &&
-        ly >= b.y - PAD && ly <= b.y + b.h + PAD) {
+    if (sx >= b.x - PAD && sx <= b.x + b.w + PAD &&
+        sy >= b.y - PAD && sy <= b.y + b.h + PAD) {
       a.cluster.activeIdx = (a.cluster.activeIdx + 1) % a.cluster.stories.length;
       render();
       return true;
@@ -1010,8 +977,8 @@ function handleArrowClick(sx, sy) {
   return false;
 }
 
-// Draws any in-progress drafts from peers as "live text" inside their target dots,
-// with a pulsing ring to show someone is writing right there.
+// Draws any in-progress drafts from peers as live monospace text near their
+// target spot, with a pulsing ring as a writing-now indicator.
 function renderDrafts() {
   const s = view.scale;
   const cellScreen = BASE_CELL * s;
@@ -1019,7 +986,6 @@ function renderDrafts() {
   const pulse = 0.5 + 0.5 * Math.sin(now / 400);
 
   for (const [id, d] of liveDrafts) {
-    // Backward compat: derive wx/wy from dotIndex if a peer is on an old client.
     let wx = d.wx, wy = d.wy;
     if ((wx == null || wy == null) && d.dotIndex != null) {
       const col = d.dotIndex % COLS;
@@ -1031,17 +997,17 @@ function renderDrafts() {
     const cx = view.tx + wx * s;
     const cy = view.ty + wy * s;
 
-    // Pulse ring around the dot.
+    // Pulse ring (black, alpha modulates).
     const ringR = 8 + pulse * 6;
-    ctx.strokeStyle = d.color || "#fff";
-    ctx.globalAlpha = 0.3 + 0.4 * pulse;
-    ctx.lineWidth = 1.2;
+    ctx.save();
+    ctx.strokeStyle = INK;
+    ctx.globalAlpha = 0.25 + 0.5 * pulse;
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.restore();
 
-    // Draft text — same "name / spot / story" format as committed posts.
     const text = [d.name, d.spot, d.story]
       .filter((p) => p && String(p).trim())
       .join(" / ");
@@ -1060,7 +1026,7 @@ function renderDrafts() {
     ctx.font = FONT;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    ctx.fillStyle = d.color || "#e8e8e8";
+    ctx.fillStyle = INK_MUTED;
     const blockH = lines.length * LINE_HEIGHT;
     let y = cy - blockH / 2;
     for (const line of lines) {
@@ -1068,24 +1034,23 @@ function renderDrafts() {
       y += LINE_HEIGHT;
     }
   }
-
 }
 
 function renderPeerCursors() {
   const s = view.scale;
+  ctx.save();
+  ctx.fillStyle = INK;
+  ctx.font = `${FONT_SIZE}px ${FONT_FAMILY}`;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
   for (const p of peers.values()) {
     if (p.wx === undefined) continue;
     const sx = view.tx + p.wx * s;
     const sy = view.ty + p.wy * s;
-    // small triangle cursor
-    ctx.fillStyle = p.color || "#fff";
-    ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + 10, sy + 4);
-    ctx.lineTo(sx + 4, sy + 10);
-    ctx.closePath();
-    ctx.fill();
+    // ASCII arrow cursor — tiny "▶" style using a + glyph.
+    ctx.fillText("+", sx - 3, sy - 6);
   }
+  ctx.restore();
 }
 
 // Find a box width where the text wraps into a roughly square block
@@ -1107,158 +1072,6 @@ function computeFullFitCap(prepared) {
 
 function clamp(v, lo = 0, hi = 1) {
   return Math.max(lo, Math.min(hi, v));
-}
-
-// ---- post-it helpers ----
-
-// Deterministic pseudo-random in [0, 1) from any integer seed.
-function postitNoise(seed) {
-  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
-  return x - Math.floor(x);
-}
-
-// Stable per-dot { angle, color }. Each dot keeps the same paper color and
-// tilt across renders — driven entirely by its grid index.
-function postitParams(idx) {
-  const angle = (postitNoise(idx) - 0.5) * 2 * POSTIT_MAX_ROT;
-  const colorIdx = Math.floor(postitNoise(idx + 9173) * POSTIT_COLORS.length);
-  return { angle, color: POSTIT_COLORS[colorIdx] };
-}
-
-// Place N post-its on an integer grid: index 0 at the center (0, 0); each
-// subsequent post-it is placed adjacent (up/down/left/right) to a randomly-
-// picked already-placed one. Deterministic per dot. Grows outward from the
-// center, no two cells ever collide.
-function generatePostitPositions(dotIdx, N) {
-  if (N === 0) return [];
-  const positions = [{ col: 0, row: 0 }];
-  const occupied = new Set(["0,0"]);
-  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];   // up, right, down, left
-  for (let i = 1; i < N; i++) {
-    let placed = false;
-    for (let attempt = 0; attempt < 100 && !placed; attempt++) {
-      const seed = dotIdx * 9173 + i * 137 + attempt * 31;
-      const parent = positions[Math.floor(postitNoise(seed) * positions.length)];
-      const [dx, dy] = dirs[Math.floor(postitNoise(seed + 1) * 4)];
-      const newPos = { col: parent.col + dx, row: parent.row + dy };
-      const key = `${newPos.col},${newPos.row}`;
-      if (!occupied.has(key)) {
-        positions.push(newPos);
-        occupied.add(key);
-        placed = true;
-      }
-    }
-    if (!placed) {
-      // Fallback: scan every existing cell for any empty neighbor (handles
-      // pathological cases where random retries kept hitting occupied cells).
-      outer: for (const p of positions) {
-        for (const [dx, dy] of dirs) {
-          const np = { col: p.col + dx, row: p.row + dy };
-          const k = `${np.col},${np.row}`;
-          if (!occupied.has(k)) {
-            positions.push(np);
-            occupied.add(k);
-            break outer;
-          }
-        }
-      }
-    }
-  }
-  return positions;
-}
-
-// Pre-baked subtle paper-grain pattern. Built lazily once the canvas ctx is
-// ready, then reused for every post-it backdrop via createPattern.
-let paperPattern = null;
-function ensurePaperPattern() {
-  if (paperPattern) return;
-  const tile = document.createElement("canvas");
-  tile.width = tile.height = 80;
-  const tx = tile.getContext("2d");
-  const img = tx.createImageData(80, 80);
-  for (let i = 0; i < img.data.length; i += 4) {
-    // dark grit at low alpha, randomly placed
-    img.data[i + 0] = 30;
-    img.data[i + 1] = 25;
-    img.data[i + 2] = 15;
-    img.data[i + 3] = Math.max(0, (Math.random() - 0.6) * 60);
-  }
-  tx.putImageData(img, 0, 0);
-  paperPattern = ctx.createPattern(tile, "repeat");
-}
-
-// ---- pin-head helpers ----
-
-// Stable per-pin world-coordinate offset from a dot center. Pin 0 sits very
-// near center; subsequent pins fan out at random angles + sqrt-scaled
-// distances within PIN_CLUSTER_RADIUS_WORLD. Indexing means new pins land in
-// new spots without reshuffling existing ones.
-function pinOffsetWorld(dotIdx, pinIndex) {
-  const seed = dotIdx * 9173 + pinIndex * 31;
-  if (pinIndex === 0) {
-    return [(postitNoise(seed)     - 0.5) * 0.6,
-            (postitNoise(seed + 1) - 0.5) * 0.6];
-  }
-  const angle = postitNoise(seed) * Math.PI * 2;
-  const distance = PIN_CLUSTER_RADIUS_WORLD * Math.sqrt(postitNoise(seed + 1));
-  return [Math.cos(angle) * distance, Math.sin(angle) * distance];
-}
-
-// Stable color choice per pin from the palette.
-function pinColor(dotIdx, pinIndex) {
-  return PIN_PALETTE[Math.floor(
-    postitNoise(dotIdx * 9173 + pinIndex * 17 + 991) * PIN_PALETTE.length)];
-}
-
-// Draws one 3D-shaded pin sphere at (sx, sy) with screen radius sr. Highlight
-// is offset to the upper-left; the dark rim of the radial gradient does the
-// edge work without needing a separate stroke or drop-shadow outline.
-function drawPin(sx, sy, sr, color, alpha) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  const offset = sr * 0.36;
-  const grad = ctx.createRadialGradient(
-    sx - offset, sy - offset, 0,
-    sx, sy, sr * 1.05,
-  );
-  grad.addColorStop(0.00, "rgba(255,255,255,0.95)");
-  grad.addColorStop(0.22, color.light);
-  grad.addColorStop(0.55, color.mid);
-  grad.addColorStop(1.00, color.dark);
-
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-// Draws the post-it rectangle (with shadow + paper texture) at the current
-// transform's origin. Caller is responsible for translate/rotate/save/restore.
-function drawPostitBackdrop(w, h, color, alpha) {
-  ensurePaperPattern();
-  const x = -w / 2, y = -h / 2;
-
-  // Drop shadow on the paper rect itself.
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.shadowColor = "rgba(0,0,0,0.28)";
-  ctx.shadowBlur = Math.max(6, w * 0.10);
-  ctx.shadowOffsetX = w * 0.03;
-  ctx.shadowOffsetY = w * 0.06;
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w, h);
-  ctx.restore();
-
-  // Paper grain on top (no shadow).
-  if (paperPattern) {
-    ctx.save();
-    ctx.globalAlpha = alpha * 0.45;
-    ctx.fillStyle = paperPattern;
-    ctx.fillRect(x, y, w, h);
-    ctx.restore();
-  }
 }
 
 // ---- input ----
@@ -1289,46 +1102,26 @@ let pinchCenter = null;
 // Track pointer-down origin so we can distinguish click (tap) from drag-pan.
 const pointerDown = new Map(); // id -> { x0, y0, moved, dragCluster, dragInitialDx, dragInitialDy }
 
-// Returns the cluster the screen point falls inside (active post-it bounds,
-// accounting for tilt + drag offset), or null. Only when post-its are visible.
+// Returns the cluster whose box (last-rendered AABB in screen space) contains
+// (sx, sy), or null. Boxes are axis-aligned now — no rotation math required.
 function _hitTestPostit(sx, sy) {
-  const s = view.scale;
-  if (s < POSTIT_FADE_START) return null;
-  const _t = clamp((s - POSTIT_FADE_START) / (MAX_SCALE - POSTIT_FADE_START), 0, 1);
-  const innerMax = LINE_HEIGHT + _t * (POSTIT_MAX_INNER - LINE_HEIGHT);
-  const halfFull = (innerMax + POSTIT_PAD * 2) / 2;
+  if (view.scale < BOX_FADE_START) return null;
   for (const cluster of clusters) {
-    const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
-    if (!story) continue;
-    const cx = view.tx + (cluster.wx + (cluster.dx || 0)) * s;
-    const cy = view.ty + (cluster.wy + (cluster.dy || 0)) * s;
-    const seed = storySeed(story);
-    const tilt = (seed - 0.5) * 2 * POSTIT_MAX_ROT;
-    const dx = sx - cx, dy = sy - cy;
-    const c = Math.cos(tilt), si = Math.sin(tilt);
-    const lx = dx * c + dy * si;
-    const ly = -dx * si + dy * c;
-    if (lx >= -halfFull && lx <= halfFull && ly >= -halfFull && ly <= halfFull) {
-      return cluster;
-    }
+    const r = cluster._boxRect;
+    if (!r) continue;
+    if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return cluster;
   }
   return null;
 }
 
-// Returns the cluster whose arrow region the screen point falls in, or null.
-// Doesn't fire the cycle action — just identifies. Used to prioritize arrow
-// clicks over starting a drag.
+// True if the screen point is inside any cluster's arrow region. Used to
+// route a tap to the cycler before treating it as drag-arming.
 function _arrowClusterAt(sx, sy) {
   const PAD = 4;
   for (const a of clusterArrowHits) {
-    const dx = sx - a.cx;
-    const dy = sy - a.cy;
-    const c = Math.cos(a.tilt), si = Math.sin(a.tilt);
-    const lx = dx * c + dy * si;
-    const ly = -dx * si + dy * c;
     const b = a.aabb;
-    if (lx >= b.x - PAD && lx <= b.x + b.w + PAD &&
-        ly >= b.y - PAD && ly <= b.y + b.h + PAD) {
+    if (sx >= b.x - PAD && sx <= b.x + b.w + PAD &&
+        sy >= b.y - PAD && sy <= b.y + b.h + PAD) {
       return a.cluster;
     }
   }
@@ -1672,7 +1465,7 @@ async function reprocessOldPhoto(story) {
     const img = new Image();
     img.onload = () => {
       story.photoImg = img;
-      story.photoBounds = computePhotoRowBounds(img);
+      story._asciiCache = null;
       resolve();
     };
     img.src = newDataURL;
@@ -1790,7 +1583,7 @@ writerSubmit.addEventListener("click", async () => {
   const story = writerStory.value.trim();
   if (!name || !spot || !story) {
     writerSubmit.textContent = "fill in all fields";
-    setTimeout(() => (writerSubmit.textContent = "leave it here"), 1500);
+    setTimeout(() => (writerSubmit.textContent = "[ leave it here ]"), 1500);
     return;
   }
   const res = await fetch("/submit", {
@@ -1813,7 +1606,7 @@ writerSubmit.addEventListener("click", async () => {
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
-    setTimeout(() => (writerSubmit.textContent = "leave it here"), 3000);
+    setTimeout(() => (writerSubmit.textContent = "[ leave it here ]"), 3000);
   }
 });
 
