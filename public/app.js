@@ -41,7 +41,7 @@ const PAPER = "#fff";
 // zoomed in, then start small and grow.
 const BOX_PAD = 4;
 const BOX_MIN_INNER = 40;                       // inner width in screen px when box first appears
-const BOX_MAX_INNER = 320;                      // inner width in screen px at full zoom
+const BOX_MAX_INNER = 160;                      // inner width in screen px at full zoom
 const BOX_FADE_START = 3.0;                     // box pops in at this scale
 const MARKER_BOX_OFFSET_X = 28;
 const MARKER_BOX_OFFSET_Y = -28;
