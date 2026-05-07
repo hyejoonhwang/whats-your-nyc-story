@@ -738,6 +738,11 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
         let col = range.a;
         const colEnd = range.b;
         while (col <= colEnd && wi < tokens.length) {
+          // Snapshot for liveness check — if neither col nor wi/chIn move,
+          // we'd loop forever (e.g. mid-word width-2 char too wide for the
+          // remaining cells in this range). Break out instead.
+          const col0 = col, wi0 = wi, chIn0 = chIn;
+
           const tok = tokens[wi];
           const remW = tokenWidth(tok, chIn);
           const avail = colEnd - col + 1;
@@ -756,8 +761,6 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
               break;
             }
           } else {
-            // Place as many chars as fit, atomically per char (so a width-2
-            // char never splits across the photo edge).
             while (chIn < tok.length) {
               const w = chCells(tok[chIn]);
               if (col + w - 1 > colEnd) break;
@@ -771,6 +774,10 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
               if (col <= colEnd && wi < tokens.length) col += 1; // word separator
             }
           }
+
+          // Liveness guard: if no state advanced, give up on this range so
+          // the next range / row can take over.
+          if (col === col0 && wi === wi0 && chIn === chIn0) break;
         }
       }
     }
