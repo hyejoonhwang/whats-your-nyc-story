@@ -419,10 +419,68 @@ function renderMapBackground() {
   const H = window.innerHeight;
   const s = view.scale;
 
-  // Pure white paper. No outlines — boroughs, NTAs, parks, and streets are
-  // all dropped so the map is just labels + stories on white.
+  // Pure white paper. Borough perimeters are intentionally NOT drawn — only
+  // the inner layers (NTAs, parks, streets) appear, so neighborhoods read as
+  // free-floating geometry without a heavy boundary box around each borough.
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, W, H);
+
+  const vb = [-view.tx / s, -view.ty / s, (W - view.tx) / s, (H - view.ty) / s];
+
+  // Parks — outlined only.
+  if (mapLayers.parks.data && s > mapLayers.parks.threshold) {
+    ctx.save();
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.5;
+    for (const f of mapLayers.parks.data) {
+      if (!bboxIntersectsView(f.bbox, vb)) continue;
+      tracePolygonFeature(f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // NTA boundaries — thin dashed.
+  if (mapLayers.nta.data && s > mapLayers.nta.threshold) {
+    ctx.save();
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.4;
+    ctx.setLineDash([2, 3]);
+    for (const f of mapLayers.nta.data) {
+      if (!bboxIntersectsView(f.bbox, vb)) continue;
+      tracePolygonFeature(f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Major streets — thin black.
+  if (mapLayers.streetsMajor.data && s > mapLayers.streetsMajor.threshold) {
+    ctx.save();
+    ctx.strokeStyle = INK_MUTED;
+    ctx.lineWidth = 0.7;
+    ctx.lineCap = "round";
+    for (const f of mapLayers.streetsMajor.data) {
+      if (!bboxIntersectsView(f.bbox, vb)) continue;
+      traceLineFeature(f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // All streets — even thinner.
+  if (mapLayers.streetsAll.data && s > mapLayers.streetsAll.threshold) {
+    ctx.save();
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 0.4;
+    ctx.lineCap = "round";
+    for (const f of mapLayers.streetsAll.data) {
+      if (!bboxIntersectsView(f.bbox, vb)) continue;
+      traceLineFeature(f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   // Borough labels — monospace caps, no serif.
   ctx.save();
