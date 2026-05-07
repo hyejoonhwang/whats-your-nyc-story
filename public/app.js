@@ -35,13 +35,15 @@ const INK_MUTED = "rgba(0,0,0,0.55)";
 const INK_FAINT = "rgba(0,0,0,0.30)";
 const PAPER = "#fff";
 
-// Story box (ASCII frame) sizing in screen px. Kept on a multiple of LINE_HEIGHT
-// so the box, body text, and ASCII portrait all share the same character grid.
-const BOX_PAD = 4;                              // outer breathing room around the frame
-const BOX_MAX_INNER = 200;                      // max inner width in screen px (used to be 120 for paper post-its)
+// Story box sizing. The inner width grows from BOX_MIN_INNER (when boxes
+// first appear at BOX_FADE_START) all the way up to BOX_MAX_INNER at MAX_SCALE.
+// Smaller floor so boxes feel modest at first then expand as you zoom in.
+const BOX_PAD = 4;
+const BOX_MIN_INNER = 50;                       // inner width in screen px when box first appears
+const BOX_MAX_INNER = 320;                      // inner width in screen px at full zoom
 const BOX_FADE_START = 1.5;                     // box pops in at this scale
-const MARKER_BOX_OFFSET_X = 36;                 // default screen-px offset of box from marker (upper-right)
-const MARKER_BOX_OFFSET_Y = -36;
+const MARKER_BOX_OFFSET_X = 30;
+const MARKER_BOX_OFFSET_Y = -30;
 
 // Cluster marker characters — driven by cluster.stories.length.
 // Stay visible at every zoom level; the leader line anchors to them.
@@ -56,13 +58,28 @@ const MARKER_FONT_BASE = 11;                    // base monospace size in px at 
 const MARKER_FONT_MIN  = 10;
 const MARKER_FONT_MAX  = 22;
 
-// ASCII portrait ramp: dark pixels → dense chars (rightmost), light → sparse.
-// Leading space is intentional — fully transparent / very-bright cells render
-// as whitespace so body text can flow into them.
-const ASCII_RAMP = " .:-=+*#%@";
-const ASCII_ALPHA_THRESH = 28;                  // 0–255 alpha cutoff
-// Portrait cell — slightly wider than glyph cell so chars don't crash into
-// each other. We tune this against the measured cellW on first render.
+// CJK / fullwidth detection. Chars in these ranges render at ~2x the basic
+// monospace cell width (Hangul, Han, kana, fullwidth Latin, etc.), so we
+// reserve 2 grid cells for them and paint the next cell as empty filler.
+function isWideChar(ch) {
+  if (!ch) return false;
+  const cp = ch.codePointAt(0);
+  return (
+    (cp >= 0x1100 && cp <= 0x115F) ||
+    (cp >= 0x2E80 && cp <= 0x303E) ||
+    (cp >= 0x3041 && cp <= 0x33FF) ||
+    (cp >= 0x3400 && cp <= 0x4DBF) ||
+    (cp >= 0x4E00 && cp <= 0x9FFF) ||
+    (cp >= 0xA000 && cp <= 0xA4CF) ||
+    (cp >= 0xAC00 && cp <= 0xD7A3) ||
+    (cp >= 0xF900 && cp <= 0xFAFF) ||
+    (cp >= 0xFE30 && cp <= 0xFE4F) ||
+    (cp >= 0xFF00 && cp <= 0xFF60) ||
+    (cp >= 0xFFE0 && cp <= 0xFFE6)
+  );
+}
+// Display width in cells for a single character (1 or 2).
+function chCells(ch) { return isWideChar(ch) ? 2 : 1; }
 
 const view = { scale: 1, tx: 0, ty: 0 };
 let currentTier = "CITY";
@@ -72,11 +89,10 @@ let currentTier = "CITY";
 const stories = [];
 const storiesById = new Map();
 
-// Stories that land within STACK_THRESHOLD world units of each other are
-// grouped into a "cluster" — only one post-it is visible at a time per
-// cluster, with an arrow at the bottom-right to cycle through the rest
-// (newest → older). Rebuilt whenever a new story arrives.
-const STACK_THRESHOLD = 10;
+// Each click gets its own dot — we only "cluster" stories at the EXACT same
+// world point (e.g. duplicate test data). Anything else stays a separate dot
+// at its own location. Rebuilt whenever a new story arrives.
+const STACK_THRESHOLD = 0.5;
 let clusters = [];
 
 function buildClusters() {
@@ -242,9 +258,7 @@ function migrateIfInWater(story) {
   }
 }
 
-// Lazily prepare a story's Pretext layout + load its photo. The minimalist
-// renderer doesn't use Pretext line walking on the cell grid (monospace makes
-// it trivial), but we still build a prepared form for the live-draft preview.
+// Lazily prepare a story's Pretext layout, photo, and float physics.
 function ensureStoryPrepared(story) {
   if (story.prepared) return;
   const fullText = [story.name, story.spot, story.story]
@@ -257,11 +271,22 @@ function ensureStoryPrepared(story) {
     img.src = story.photo;
     img.onload = () => {
       story.photoImg = img;
-      story._asciiCache = null;  // recomputed lazily at render time
+      story.photoBounds = computePhotoRowBounds(img);
       render();
       // If this is an unprocessed JPEG from before bg-removal existed,
       // run it through the segmenter in the background and persist.
       queuePhotoReprocess(story);
+    };
+  }
+
+  // Drift physics for the photo inside the box (screen-px offsets relative
+  // to the box's interior center). Same gentle wander the post-its had.
+  if (!story.float) {
+    story.float = {
+      ox: (Math.random() - 0.5) * 8,
+      oy: (Math.random() - 0.5) * 8,
+      vx: (Math.random() > 0.5 ? 1 : -1) * 0.4,
+      vy: (Math.random() > 0.5 ? 1 : -1) * 0.4,
     };
   }
 }
@@ -394,80 +419,10 @@ function renderMapBackground() {
   const H = window.innerHeight;
   const s = view.scale;
 
-  // Pure white paper.
+  // Pure white paper. No outlines — boroughs, NTAs, parks, and streets are
+  // all dropped so the map is just labels + stories on white.
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, W, H);
-
-  const vb = [-view.tx / s, -view.ty / s, (W - view.tx) / s, (H - view.ty) / s];
-
-  // Borough outlines — bold black perimeter, no fills.
-  if (mapLayers.boroughs.data) {
-    ctx.save();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.1;
-    ctx.lineJoin = "round";
-    for (const f of mapLayers.boroughs.data) {
-      if (!bboxIntersectsView(f.bbox, vb)) continue;
-      tracePolygonFeature(f);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // Parks — outlined only (no fill).
-  if (mapLayers.parks.data && s > mapLayers.parks.threshold) {
-    ctx.save();
-    ctx.strokeStyle = INK_FAINT;
-    ctx.lineWidth = 0.5;
-    for (const f of mapLayers.parks.data) {
-      if (!bboxIntersectsView(f.bbox, vb)) continue;
-      tracePolygonFeature(f);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // NTA boundaries — thin dashed black.
-  if (mapLayers.nta.data && s > mapLayers.nta.threshold) {
-    ctx.save();
-    ctx.strokeStyle = INK_FAINT;
-    ctx.lineWidth = 0.4;
-    ctx.setLineDash([2, 3]);
-    for (const f of mapLayers.nta.data) {
-      if (!bboxIntersectsView(f.bbox, vb)) continue;
-      tracePolygonFeature(f);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // Major streets — thin black.
-  if (mapLayers.streetsMajor.data && s > mapLayers.streetsMajor.threshold) {
-    ctx.save();
-    ctx.strokeStyle = INK_MUTED;
-    ctx.lineWidth = 0.7;
-    ctx.lineCap = "round";
-    for (const f of mapLayers.streetsMajor.data) {
-      if (!bboxIntersectsView(f.bbox, vb)) continue;
-      traceLineFeature(f);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // All streets — even thinner, more transparent.
-  if (mapLayers.streetsAll.data && s > mapLayers.streetsAll.threshold) {
-    ctx.save();
-    ctx.strokeStyle = INK_FAINT;
-    ctx.lineWidth = 0.4;
-    ctx.lineCap = "round";
-    for (const f of mapLayers.streetsAll.data) {
-      if (!bboxIntersectsView(f.bbox, vb)) continue;
-      traceLineFeature(f);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
 
   // Borough labels — monospace caps, no serif.
   ctx.save();
@@ -613,56 +568,54 @@ function render() {
 }
 
 // ============================================================================
-// ASCII portrait — convert a transparent PNG into a char grid that renders as
-// part of the story's text body. Per-row column bounds let body text reflow
-// around the silhouette so everything stays as text.
+// Photo thumbnail — transparent PNG (background already removed by MediaPipe)
+// rendered as a real raster image inside the box, with float physics for the
+// gentle drift you see on each story. Per-row alpha bounds let body text
+// reflow around the silhouette so the text follows the figure's contour.
 // ============================================================================
+const PHOTO_SAMPLE = 96;             // resolution we sample alpha bounds at
+const PHOTO_ALPHA_THRESHOLD = 30;    // 0–255 alpha cutoff for "figure" pixels
 
-// Sample the source image at (charsW × charsH), then for each cell pick a char
-// from ASCII_RAMP based on darkness; transparent cells become spaces. Returns
-// { grid: char[][], rowBounds: ({left,right}|null)[] }. Cached on the story
-// object so we only recompute when the cell dimensions change (i.e. on zoom).
-function getOrComputeAsciiPortrait(story, charsW, charsH) {
-  if (!story.photoImg) return null;
-  const cache = story._asciiCache;
-  if (cache && cache.charsW === charsW && cache.charsH === charsH) return cache;
-
+// Per-row left/right opaque pixel bounds in PHOTO_SAMPLE-local coords.
+// Computed once when the photo loads; reused across every render frame
+// regardless of how the photo's drawn-size changes with zoom.
+function computePhotoRowBounds(img) {
   const c = document.createElement("canvas");
-  c.width = charsW; c.height = charsH;
+  c.width = c.height = PHOTO_SAMPLE;
   const cx = c.getContext("2d");
-  cx.imageSmoothingEnabled = true;
-  cx.imageSmoothingQuality = "high";
-  cx.drawImage(story.photoImg, 0, 0, charsW, charsH);
-  const data = cx.getImageData(0, 0, charsW, charsH).data;
-
-  const grid = new Array(charsH);
-  const rowBounds = new Array(charsH);
-  for (let y = 0; y < charsH; y++) {
-    const row = new Array(charsW);
+  cx.drawImage(img, 0, 0, PHOTO_SAMPLE, PHOTO_SAMPLE);
+  const data = cx.getImageData(0, 0, PHOTO_SAMPLE, PHOTO_SAMPLE).data;
+  const out = new Array(PHOTO_SAMPLE);
+  for (let y = 0; y < PHOTO_SAMPLE; y++) {
     let l = -1, r = -1;
-    for (let x = 0; x < charsW; x++) {
-      const i = (y * charsW + x) * 4;
-      const a = data[i + 3];
-      if (a < ASCII_ALPHA_THRESH) {
-        row[x] = " ";
-      } else {
-        const r0 = data[i], g0 = data[i + 1], b0 = data[i + 2];
-        // 0..1 luminance, perceptual weighting.
-        const lum = (0.299 * r0 + 0.587 * g0 + 0.114 * b0) / 255;
-        // Brighter pixel → lighter char. We map [0..1] luminance to a ramp
-        // index in [1 .. RAMP.length-1] (skip pure space; opaque means present).
-        const idx = Math.max(1, Math.floor((1 - lum) * (ASCII_RAMP.length - 1)));
-        row[x] = ASCII_RAMP[idx];
+    for (let x = 0; x < PHOTO_SAMPLE; x++) {
+      if (data[(y * PHOTO_SAMPLE + x) * 4 + 3] > PHOTO_ALPHA_THRESHOLD) {
         if (l === -1) l = x;
         r = x;
       }
     }
-    grid[y] = row;
-    rowBounds[y] = l === -1 ? null : { left: l, right: r };
+    out[y] = l === -1 ? null : { leftX: l, rightX: r };
   }
+  return out;
+}
 
-  story._asciiCache = { charsW, charsH, grid, rowBounds };
-  return story._asciiCache;
+// Returns the screen-x bounds of opaque pixels across the rows that overlap a
+// given screen y-range, or null if the y-range misses the figure entirely.
+function getPhotoOccupiedRange(bounds, photoLeft, photoTop, photoSize, lineY, lineH) {
+  const scale = PHOTO_SAMPLE / photoSize;
+  const yStart = Math.max(0, Math.floor((lineY - photoTop) * scale));
+  const yEnd = Math.min(PHOTO_SAMPLE, Math.ceil((lineY + lineH - photoTop) * scale));
+  if (yEnd <= yStart) return null;
+  let lSample = Infinity, rSample = -Infinity;
+  for (let y = yStart; y < yEnd; y++) {
+    const b = bounds[y];
+    if (!b) continue;
+    if (b.leftX < lSample) lSample = b.leftX;
+    if (b.rightX > rSample) rSample = b.rightX;
+  }
+  if (lSample === Infinity) return null;
+  const inv = photoSize / PHOTO_SAMPLE;
+  return { pLeft: photoLeft + lSample * inv, pRight: photoLeft + rSample * inv };
 }
 
 // Cache character widths to avoid expensive measureText calls every frame.
@@ -691,9 +644,25 @@ function storySeed(story) {
 const clusterArrowHits = [];
 const ARROW_HIT_RADIUS = 12;
 
-// Build a 2-D char grid for one story's box. Frame, header, rule, ASCII
-// portrait, and word-wrapped body all live on the same monospace cell grid.
-function buildStoryGrid(story, cluster, innerCols, innerRows) {
+// Place a single character into the grid at (r, c), reserving 2 cells for
+// CJK/fullwidth glyphs (the second cell becomes "" so row.join doesn't
+// double-count its width). Returns the number of cells consumed.
+function placeChar(grid, r, c, ch) {
+  if (isWideChar(ch)) {
+    grid[r][c] = ch;
+    if (c + 1 < grid[r].length) grid[r][c + 1] = "";
+    return 2;
+  }
+  grid[r][c] = ch;
+  return 1;
+}
+
+// Build a 2-D char grid for one story's box. Frame, header, rule, and body
+// share the same monospace cell grid; the photo is rendered as a raster on
+// top in renderStories. portraitOcc is an optional per-body-row { colStart,
+// colEnd } in 0..innerCols-1 for cells the photo silhouette occupies — body
+// text wraps around it.
+function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
   const boxCols = innerCols + 2;
   const boxRows = innerRows + 2;
   const grid = new Array(boxRows);
@@ -715,15 +684,18 @@ function buildStoryGrid(story, cluster, innerCols, innerRows) {
 
   // Header row + rule (only if box is tall enough to bother).
   let bodyTopR = 1;
-  let bodyBotR = boxRows - 2;
+  const bodyBotR = boxRows - 2;
   if (boxRows >= 5) {
     const headParts = [];
     if (story.name) headParts.push(story.name);
     if (story.spot) headParts.push(story.spot);
-    let headerText = " " + headParts.join(" / ");
-    if (headerText.length > innerCols) headerText = headerText.slice(0, innerCols - 1) + "…";
-    for (let i = 0; i < headerText.length && i < innerCols; i++) {
-      grid[1][1 + i] = headerText[i];
+    const headerText = " " + headParts.join(" / ");
+    let cellsUsed = 0;
+    for (const ch of headerText) {
+      const w = chCells(ch);
+      if (cellsUsed + w > innerCols) break;
+      placeChar(grid, 1, 1 + cellsUsed, ch);
+      cellsUsed += w;
     }
     grid[2][0] = "├";
     grid[2][boxCols - 1] = "┤";
@@ -733,85 +705,70 @@ function buildStoryGrid(story, cluster, innerCols, innerRows) {
 
   const bodyHeight = bodyBotR - bodyTopR + 1;
 
-  // Place ASCII portrait in body region, centered. pRows is roughly half of
-  // pCols because monospace cells are about twice as tall as they are wide,
-  // so a 12×6 char grid renders as a ~square portrait on screen.
-  let portraitOcc = null;
-  if (story.photoImg && bodyHeight >= 4 && innerCols >= 12) {
-    const pCols = clamp(Math.floor(innerCols * 0.55), 6, 30);
-    const pRows = clamp(Math.round(pCols * 0.5), 3, bodyHeight - 1);
-    const portrait = getOrComputeAsciiPortrait(story, pCols, pRows);
-    if (portrait) {
-      const pColStart = Math.floor((innerCols - pCols) / 2);
-      const pRowStart = Math.floor((bodyHeight - pRows) / 2);
-      portraitOcc = new Array(bodyHeight).fill(null);
-      for (let pr = 0; pr < pRows; pr++) {
-        const rowChars = portrait.grid[pr];
-        for (let pc = 0; pc < pCols; pc++) {
-          const ch = rowChars[pc];
-          if (ch !== " ") {
-            grid[bodyTopR + pRowStart + pr][1 + pColStart + pc] = ch;
-          }
-        }
-        const b = portrait.rowBounds[pr];
-        if (b) {
-          portraitOcc[pRowStart + pr] = {
-            colStart: pColStart + b.left,
-            colEnd:   pColStart + b.right,
-          };
-        }
-      }
-    }
-  }
-
-  // Reflow body text around the portrait silhouette: greedy word-fit into the
-  // remaining cells of each body row. With monospace, char count = pixel width,
-  // so this stays straightforward; Pretext's prepared form would buy us nothing
-  // extra on a cell grid.
+  // Reflow body text around the photo silhouette (when present): greedy
+  // word-fit into the cells of each body row, splitting around portraitOcc.
+  // Words are tokenized into Array.from-grapheme runs so CJK characters
+  // (each width-2) and emoji are placed atomically.
   const bodyText = (story.story || "").trim();
   if (bodyText) {
-    const words = bodyText.split(/\s+/);
+    // Split into "words" by whitespace, then expand each word into an array
+    // of code points so we can measure per-char cell width and break long
+    // words mid-character if needed.
+    const tokens = bodyText.split(/\s+/).filter(Boolean).map(w => Array.from(w));
     let wi = 0;
-    let charInWord = 0;
-    for (let br = 0; br < bodyHeight && wi < words.length; br++) {
+    let chIn = 0;  // index into tokens[wi]
+
+    function tokenWidth(t, fromIdx) {
+      let w = 0;
+      for (let i = fromIdx; i < t.length; i++) w += chCells(t[i]);
+      return w;
+    }
+
+    for (let br = 0; br < bodyHeight && wi < tokens.length; br++) {
       const occ = portraitOcc ? portraitOcc[br] : null;
-      // Compute available col ranges (in 0..innerCols-1).
       const ranges = [];
       if (!occ) {
         ranges.push({ a: 0, b: innerCols - 1 });
       } else {
-        if (occ.colStart > 0)            ranges.push({ a: 0,             b: occ.colStart - 2 });
-        if (occ.colEnd < innerCols - 1)  ranges.push({ a: occ.colEnd + 2, b: innerCols - 1 });
+        if (occ.colStart > 0)             ranges.push({ a: 0,              b: occ.colStart - 2 });
+        if (occ.colEnd   < innerCols - 1) ranges.push({ a: occ.colEnd + 2, b: innerCols - 1 });
       }
       for (const range of ranges) {
         if (range.b < range.a) continue;
         let col = range.a;
         const colEnd = range.b;
-        while (col <= colEnd && wi < words.length) {
-          const word = words[wi];
-          const remaining = word.slice(charInWord);
+        while (col <= colEnd && wi < tokens.length) {
+          const tok = tokens[wi];
+          const remW = tokenWidth(tok, chIn);
           const avail = colEnd - col + 1;
-          if (charInWord === 0 && remaining.length > avail) {
-            // Would wrap — but if the word exceeds even the full innerCols
-            // width, hard-break into chunks; otherwise let it land on the
-            // next row.
-            if (remaining.length > innerCols) {
-              for (let k = 0; k < avail; k++) grid[bodyTopR + br][1 + col + k] = remaining[k];
-              charInWord += avail;
-              col = colEnd + 1;
+          if (chIn === 0 && remW > avail) {
+            // Whole word doesn't fit. Hard-break only if even a full row
+            // can't hold it; otherwise leave it for the next row.
+            if (remW > innerCols) {
+              while (chIn < tok.length && col <= colEnd) {
+                const w = chCells(tok[chIn]);
+                if (col + w - 1 > colEnd) break;
+                placeChar(grid, bodyTopR + br, 1 + col, tok[chIn]);
+                col += w;
+                chIn += 1;
+              }
             } else {
               break;
             }
           } else {
-            const toPlace = Math.min(remaining.length, avail);
-            for (let k = 0; k < toPlace; k++) grid[bodyTopR + br][1 + col + k] = remaining[k];
-            col += toPlace;
-            if (toPlace === remaining.length) {
+            // Place as many chars as fit, atomically per char (so a width-2
+            // char never splits across the photo edge).
+            while (chIn < tok.length) {
+              const w = chCells(tok[chIn]);
+              if (col + w - 1 > colEnd) break;
+              placeChar(grid, bodyTopR + br, 1 + col, tok[chIn]);
+              col += w;
+              chIn += 1;
+            }
+            if (chIn === tok.length) {
               wi += 1;
-              charInWord = 0;
-              if (col <= colEnd && wi < words.length) col += 1; // word separator
-            } else {
-              charInWord += toPlace;
+              chIn = 0;
+              if (col <= colEnd && wi < tokens.length) col += 1; // word separator
             }
           }
         }
@@ -832,7 +789,7 @@ function buildStoryGrid(story, cluster, innerCols, innerRows) {
     }
   }
 
-  return { grid, arrowSpan };
+  return { grid, arrowSpan, bodyTopR, bodyHeight };
 }
 
 function renderStories() {
@@ -854,10 +811,12 @@ function renderStories() {
 
   const boxVisible = s >= BOX_FADE_START;
 
-  // Inner width grows linearly with zoom from a small minimum to BOX_MAX_INNER.
-  // Cap to a multiple of cellW so the frame aligns cleanly with the char grid.
+  // Inner width grows with zoom: BOX_MIN_INNER at BOX_FADE_START, BOX_MAX_INNER
+  // at MAX_SCALE. Curve is a gentle ease-in (s^1.4) so boxes stay small early
+  // and ramp up faster at higher zooms.
   const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
-  const innerMaxPx = Math.max(cellW * 14, cellW * 14 + _t * (BOX_MAX_INNER - cellW * 14));
+  const eased = Math.pow(_t, 1.4);
+  const innerMaxPx = BOX_MIN_INNER + eased * (BOX_MAX_INNER - BOX_MIN_INNER);
 
   // Marker font size ramps gently with zoom — bigger glyphs are easier to see
   // on dense maps but shouldn't overpower the box at high zoom.
@@ -894,10 +853,10 @@ function renderStories() {
     hasPhotos = true; // keep the render loop spinning while boxes are visible
 
     // Box dimensions in cells. Cells are taller than wide on most monospace
-    // fonts (cellW≈6, cellH=12), so innerRows is set so the box renders as a
-    // visually square rectangle on screen instead of a tall column.
-    const innerCols = Math.max(14, Math.floor(innerMaxPx / cellW));
-    const innerRows = Math.max(8, Math.round(innerCols * cellW / cellH));
+    // fonts, so innerRows is set so the box renders as a visually square
+    // rectangle on screen instead of a tall column.
+    const innerCols = Math.max(8, Math.floor(innerMaxPx / cellW));
+    const innerRows = Math.max(5, Math.round(innerCols * cellW / cellH));
     const boxCols = innerCols + 2;
     const boxRows = innerRows + 2;
     const boxW = boxCols * cellW;
@@ -906,15 +865,66 @@ function renderStories() {
     // Box screen-space top-left: marker + screen offset + drag offset (world × s).
     const dragSx = (cluster.dx || 0) * s;
     const dragSy = (cluster.dy || 0) * s;
-    let boxLeft = mx + MARKER_BOX_OFFSET_X + dragSx;
-    let boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - boxH;
-    // (offset puts the bottom-left corner near marker; subtract boxH so the
-    //  whole box sits up-and-right of the marker.)
+    const boxLeft = mx + MARKER_BOX_OFFSET_X + dragSx;
+    const boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - boxH;
 
-    // Build content
-    const { grid, arrowSpan } = buildStoryGrid(story, cluster, innerCols, innerRows);
+    // Photo size scales with box: ~50% of inner width, capped to body height.
+    // We compute it before laying out the body text so reflow knows what
+    // cells to leave open.
+    const innerLeftPx = boxLeft + cellW;          // inside the │
+    const headerSize  = boxRows >= 5 ? 2 : 0;     // header row + rule row
+    const bodyTopRowI = 1 + headerSize;
+    const bodyTopPx   = boxTop + bodyTopRowI * cellH;
+    const bodyBotPx   = boxTop + (boxRows - 1) * cellH;
+    const innerW      = innerCols * cellW;
+    const innerBodyH  = bodyBotPx - bodyTopPx;
 
-    // White background knock-out for crisp ASCII over the map.
+    let photoOcc = null;
+    let photoLeft = 0, photoTop = 0, photoSize = 0;
+    const havePhoto = !!story.photoImg && innerW > 60 && innerBodyH > 50;
+    if (havePhoto) {
+      photoSize = Math.min(120, Math.floor(Math.min(innerW * 0.55, innerBodyH * 0.85)));
+
+      // Drift physics — bouncing inside the body region.
+      const f = story.float;
+      const maxOx = (innerW - photoSize) / 2 - 4;
+      const maxOy = (innerBodyH - photoSize) / 2 - 4;
+      if (maxOx > 0 && maxOy > 0) {
+        f.ox += f.vx; f.oy += f.vy;
+        if (f.ox < -maxOx || f.ox > maxOx) { f.vx *= -1; f.ox = clamp(f.ox, -maxOx, maxOx); }
+        if (f.oy < -maxOy || f.oy > maxOy) { f.vy *= -1; f.oy = clamp(f.oy, -maxOy, maxOy); }
+      } else {
+        f.ox = 0; f.oy = 0;
+      }
+      photoLeft = innerLeftPx + innerW / 2 + f.ox - photoSize / 2;
+      photoTop  = bodyTopPx + innerBodyH / 2 + f.oy - photoSize / 2;
+
+      // Per-body-row cell occupancy from the silhouette's alpha bounds.
+      if (story.photoBounds) {
+        photoOcc = new Array(innerRows).fill(null);
+        for (let br = 0; br < innerRows; br++) {
+          const rowY = bodyTopPx + br * cellH;
+          // Skip rows that don't fall inside the body region.
+          if (br < headerSize) continue;
+          const r = getPhotoOccupiedRange(
+            story.photoBounds, photoLeft, photoTop, photoSize, rowY, cellH);
+          if (!r) continue;
+          // Convert screen px range → cell columns relative to inner area.
+          const colStart = Math.max(0, Math.floor((r.pLeft  - innerLeftPx) / cellW));
+          const colEnd   = Math.min(innerCols - 1, Math.ceil((r.pRight - innerLeftPx) / cellW) - 1);
+          if (colEnd >= colStart) {
+            // body-row index inside buildStoryGrid is offset by headerSize
+            photoOcc[br - headerSize] = { colStart, colEnd };
+          }
+        }
+      }
+    }
+
+    // Build content (text reflows around photoOcc, photo cells stay empty).
+    const { grid, arrowSpan } = buildStoryGrid(
+      story, cluster, innerCols, innerRows, photoOcc);
+
+    // White background knock-out for crisp box over the map.
     ctx.fillStyle = PAPER;
     ctx.fillRect(boxLeft - 1, boxTop - 1, boxW + 2, boxH + 2);
 
@@ -930,20 +940,34 @@ function renderStories() {
     ctx.stroke();
     ctx.restore();
 
-    // Render the grid row-by-row.
+    // Render the grid PER CELL — keeps frame chars and CJK glyphs aligned
+    // regardless of the canvas's actual measured glyph widths.
     ctx.save();
     ctx.font = FONT;
     ctx.fillStyle = INK;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    let yy = boxTop;
-    for (const row of grid) {
-      ctx.fillText(row.join(""), boxLeft, yy);
-      yy += cellH;
+    for (let r = 0; r < boxRows; r++) {
+      const yy = boxTop + r * cellH;
+      for (let c = 0; c < boxCols; c++) {
+        const ch = grid[r][c];
+        if (!ch || ch === " ") continue;
+        ctx.fillText(ch, boxLeft + c * cellW, yy);
+      }
     }
     ctx.restore();
 
-    // Hit-test rect for the box (drag/drag-detect uses this).
+    // Photo on top, clipped to the box interior so drift never escapes.
+    if (havePhoto) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(boxLeft + cellW, bodyTopPx, innerW, innerBodyH);
+      ctx.clip();
+      ctx.drawImage(story.photoImg, photoLeft, photoTop, photoSize, photoSize);
+      ctx.restore();
+    }
+
+    // Hit-test rect for drag.
     cluster._boxRect = { x: boxLeft, y: boxTop, w: boxW, h: boxH };
 
     // Arrow click zone: the [n/N →] span on the bottom border.
@@ -1465,7 +1489,7 @@ async function reprocessOldPhoto(story) {
     const img = new Image();
     img.onload = () => {
       story.photoImg = img;
-      story._asciiCache = null;
+      story.photoBounds = computePhotoRowBounds(img);
       resolve();
     };
     img.src = newDataURL;
