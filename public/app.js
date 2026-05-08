@@ -1461,8 +1461,9 @@ function closeComments() {
 
 // Re-position the open comments panel under its story card every render
 // frame so the panel tracks the card as the user pans / zooms / drags.
-// Closes the panel if the card is no longer rendered (e.g. user zoomed
-// out below BOX_FADE_START or panned the card off-screen).
+// Also re-binds to the cluster's currently-active story when the user
+// cycles via [ n/N → ] — so the panel always shows the comments for the
+// card that's actually visible, never the previously-active sibling.
 function syncCommentsPosition() {
   if (commentsEl.hidden || !_commentsStoryId) return;
   let cluster = null;
@@ -1472,6 +1473,17 @@ function syncCommentsPosition() {
   if (!cluster || !cluster._boxRect) {
     closeComments();
     return;
+  }
+  // If the user cycled to a different story in this cluster, rebind the
+  // panel: switch the spot header, swap the comment list, clear the
+  // half-typed form so a stray post doesn't land on the wrong story.
+  const activeStory = cluster.stories[cluster.activeIdx] || cluster.stories[0];
+  if (activeStory && activeStory._id && activeStory._id !== _commentsStoryId) {
+    _commentsStoryId = activeStory._id;
+    commentsSpot.textContent = `[ ${(activeStory.spot || "").slice(0, 30) || "—"} ]`;
+    _renderComments(activeStory);
+    commentsName.value = "";
+    commentsText.value = "";
   }
   const cardR = cluster._boxRect;
   const PANEL_MIN_W = 220;
