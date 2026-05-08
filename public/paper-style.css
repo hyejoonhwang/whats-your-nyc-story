@@ -1,0 +1,329 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a0a0a;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #e8e8e8;
+}
+
+/* Intro panel — the corkboard is painted onto an <canvas id="intro-canvas">
+   nested inside this DOM <aside>, so the visual is unchanged from the old
+   canvas-drawn version while the wrapper handles click-blocking, the
+   collapsed corner handle, and the mobile centered-modal layout. */
+#intro {
+  position: fixed;
+  z-index: 50;
+}
+#intro.open  { top: 20px; left: 20px; }
+#intro.closed { top: 20px; left: 20px; }
+#intro.open #intro-handle { display: none; }
+#intro.closed #intro-canvas,
+#intro.closed #intro-close { display: none; }
+
+#intro-canvas { display: block; }
+
+#intro-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(255, 248, 230, 0.92);
+  color: rgba(60, 35, 10, 0.92);
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  font-family: Georgia, serif;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 6px;
+  line-height: 18px;
+  border-radius: 0;
+  z-index: 1;
+}
+#intro-close:hover { background: rgba(75, 45, 20, 0.85); color: #fef8df; }
+
+#intro-handle {
+  background: rgba(255, 248, 230, 0.92);
+  color: rgba(60, 35, 10, 0.92);
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  font-family: Georgia, serif;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 0;
+  box-shadow: 0 3px 8px rgba(60, 35, 10, 0.16);
+}
+#intro-handle:hover { background: rgba(75, 45, 20, 0.85); color: #fef8df; }
+
+/* Mobile: center the corkboard with a soft darkening backdrop. */
+@media (max-width: 768px) {
+  #intro.open {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  #intro.open #intro-canvas {
+    box-shadow: 0 0 0 9999px rgba(40, 25, 5, 0.45);
+  }
+}
+
+/* Comments panel — paper-themed (cream + sepia ink). Anchored flush to a
+   post-it's bottom edge by JS so it reads as an extension of the card. */
+#comments {
+  position: fixed;
+  z-index: 10;
+  background: #fbf3da;
+  border: 1px dashed rgba(75, 45, 20, 0.55);
+  padding: 8px 10px 10px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: inherit;
+  color: rgba(60, 35, 10, 0.92);
+  box-shadow: 0 4px 14px rgba(60, 35, 10, 0.18);
+}
+#comments[hidden] { display: none; }
+.comments-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px dashed rgba(75, 45, 20, 0.55);
+  padding-bottom: 6px;
+  color: rgba(75, 45, 20, 0.85);
+}
+#comments-close {
+  background: transparent;
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  color: rgba(60, 35, 10, 0.92);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 6px;
+  line-height: 1;
+}
+#comments-close:hover { background: rgba(75, 45, 20, 0.85); color: #fbf3da; }
+#comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+#comments-list:empty::before {
+  content: "no comments yet — be the first";
+  color: rgba(75, 45, 20, 0.5);
+  font-style: italic;
+}
+.comment-item {
+  border-left: 2px solid rgba(75, 45, 20, 0.7);
+  padding: 2px 6px;
+}
+.comment-author { font-weight: bold; letter-spacing: 0.3px; }
+.comment-text { display: block; margin-top: 1px; }
+#comments input,
+#comments textarea {
+  background: #fffaeb;
+  border: 1px solid rgba(75, 45, 20, 0.45);
+  color: rgba(60, 35, 10, 0.92);
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+  outline: none;
+  border-radius: 0;
+}
+#comments input::placeholder,
+#comments textarea::placeholder { color: rgba(75, 45, 20, 0.45); }
+#comments input:focus,
+#comments textarea:focus { background: #fffefa; }
+#comments-submit {
+  background: rgba(75, 45, 20, 0.85);
+  color: #fbf3da;
+  border: 1px solid rgba(75, 45, 20, 0.85);
+  padding: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  border-radius: 0;
+}
+#comments-submit:hover { background: rgba(60, 35, 10, 1); }
+
+#map {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+}
+
+#writer {
+  position: fixed;
+  z-index: 10;
+  background: #111;
+  border: 1px solid #333;
+  padding: 12px;
+  width: 260px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: inherit;
+  color: #e8e8e8;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+#writer[hidden] { display: none; }
+
+.writer-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #888;
+}
+
+#writer-close {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+#writer input,
+#writer textarea {
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  color: #e8e8e8;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+  outline: none;
+}
+
+#writer input:focus,
+#writer textarea:focus {
+  border-color: #666;
+}
+
+#writer-submit {
+  background: #e8e8e8;
+  color: #0a0a0a;
+  border: none;
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#writer-submit:hover { background: #fff; }
+
+#camera-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+#camera-preview {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  transform: scaleX(-1); /* mirror — natural selfie view */
+}
+
+#camera-preview[hidden] { display: none; }
+
+#camera-snap { display: none; }
+
+#camera-thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+
+#camera-thumb[hidden] { display: none; }
+
+#camera-controls {
+  display: flex;
+  gap: 8px;
+}
+
+#camera-controls button {
+  background: #222;
+  color: #ccc;
+  border: 1px solid #444;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#camera-controls button:hover { border-color: #888; }
+
+/* Confirmation overlay — sits inside #writer (which is position: fixed),
+   covering it so input fields are visually subdued during the prompt. */
+#writer { position: fixed; }
+#writer-confirm {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.92);
+  border: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 20px;
+  z-index: 1;
+}
+#writer-confirm[hidden] { display: none; }
+
+.writer-confirm-text {
+  color: #e8e8e8;
+  font-size: 13px;
+  text-align: center;
+  line-height: 1.55;
+}
+.writer-confirm-sub {
+  color: #888;
+  font-size: 11px;
+}
+.writer-confirm-buttons {
+  display: flex;
+  gap: 8px;
+}
+.writer-confirm-buttons button {
+  background: #222;
+  color: #ccc;
+  border: 1px solid #444;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.writer-confirm-buttons button:hover { border-color: #888; color: #fff; }
+#writer-confirm-yes {
+  background: #e8e8e8 !important;
+  color: #0a0a0a !important;
+  border-color: #e8e8e8 !important;
+}
+#writer-confirm-yes:hover { background: #fff !important; border-color: #fff !important; }
