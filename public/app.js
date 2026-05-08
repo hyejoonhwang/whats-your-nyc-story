@@ -19,7 +19,7 @@ const GRID_H = ROWS * BASE_CELL;
 const TIER_BOROUGH = 2.0;
 const TIER_BLOCKS = 5.0;
 const MIN_SCALE = 0.3;
-const MAX_SCALE = 20;
+const MAX_SCALE = 25;
 
 const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 const FONT_SIZE = 10;
@@ -36,14 +36,19 @@ const INK_FAINT = "rgba(0,0,0,0.30)";   // (still used as faint accent)
 const MAP_GREY = "#c8c8c8";             // every line on the map
 const PAPER = "#fff";
 
-// Story box sizing. Cards hold off until BOX_FADE_START so dense maps don't
-// drown in overlapping boxes. Above that, each card sizes itself to fit
-// exactly the text its author wrote (plus the photo) — no zoom-based growth,
-// so cards have a stable footprint regardless of how far you zoom in.
+// Story box sizing. Cards appear at BOX_FADE_START at 1/3 of their natural
+// (content-driven) size, then grow linearly with zoom up to full natural
+// size at MAX_SCALE. Each card is square in screen pixels — its inner
+// dimensions are picked so the rendered box is roughly W = H.
 const BOX_PAD = 4;
 const BOX_FADE_START = 15;                      // cards appear only after ~15× zoom
+const BOX_START_SCALE = 1 / 3;                  // initial size relative to natural
 const MARKER_BOX_OFFSET_X = 22;
 const MARKER_BOX_OFFSET_Y = -22;
+// Uniform photo dimensions (in cells) across every card. Cell aspect 1:2
+// (cellW:cellH) → 10×5 cells = 60×60 px native = visually square.
+const PHOTO_CELLS_W = 10;
+const PHOTO_CELLS_H = 5;
 
 // Cluster marker characters — driven by cluster.stories.length.
 // Stay visible at every zoom level; the leader line anchors to them.
@@ -727,22 +732,20 @@ function placeChar(grid, r, c, ch) {
   return 1;
 }
 
-// Compute the natural box size in cells for a story — sized to fit all the
-// text the user wrote plus the photo (if any). Result is cached on the
-// story object; runs once per story and again on photo load (which can
-// expand the photo region after the fact).
+// Pick the smallest square card whose body region fits the story's text
+// plus the (uniform) photo. Square means boxCols × cellW = boxRows × cellH;
+// since cellH = 2 × cellW, that's boxRows = boxCols/2 and the algebra below
+// works in even values of innerCols. Cached per story.
 function computeBoxSize(story) {
   if (story._boxCells) return story._boxCells;
 
   const headerName = (story.name || "").trim();
   const headerSpot = (story.spot || "").trim();
-  const bodyChars = graphemes((story.story || "").trim());
+  const bodyChars  = graphemes((story.story || "").trim());
 
-  // Total cell-width of the body (sum of grapheme widths so CJK counts as 2).
   let bodyW = 0;
   for (const g of bodyChars) bodyW += chCells(g);
 
-  // Header width (includes leading space + " / " separator).
   let headerW = 1;
   for (const g of graphemes(headerName)) headerW += chCells(g);
   if (headerSpot) {
@@ -750,35 +753,32 @@ function computeBoxSize(story) {
     for (const g of graphemes(headerSpot)) headerW += chCells(g);
   }
 
-  // Pick innerCols by text length: shorter cards stay narrow, longer cards
-  // get wider so they don't grow absurdly tall. Always at least wide enough
-  // to fit the header without truncation.
-  let innerCols;
-  if (bodyW < 30)       innerCols = 12;
-  else if (bodyW < 80)  innerCols = 16;
-  else if (bodyW < 160) innerCols = 20;
-  else                  innerCols = 24;
-  innerCols = Math.max(innerCols, Math.min(headerW, 32));
+  const hasPhoto  = !!story.photoImg;
+  const photoArea = hasPhoto ? PHOTO_CELLS_W * PHOTO_CELLS_H : 0;
+  const slack     = Math.ceil(bodyW * 0.10) + 4;
+  const need      = bodyW + slack + photoArea;
 
-  // Photo cells (if photo loaded); roughly square on screen → 2× wider in
-  // cells than tall.
-  const hasPhoto = !!story.photoImg;
-  let photoCols = 0, photoRows = 0;
-  if (hasPhoto && innerCols >= 12) {
-    photoCols = Math.max(6, Math.floor(innerCols * 0.55));
-    photoRows = Math.max(3, Math.floor(photoCols * 0.5));
-  }
+  // Square constraint:
+  //   boxCols  = innerCols + 2 (must be even for clean halving)
+  //   boxRows  = boxCols / 2 = innerCols/2 + 1
+  //   innerRows = boxRows - 2 = innerCols/2 - 1
+  //   bodyRows  = innerRows - 2 = innerCols/2 - 3   (header + rule)
+  //   bodyCells = bodyRows × innerCols
+  //
+  // Find the smallest even innerCols whose bodyCells ≥ need.
+  let innerCols = 12;
+  while ((innerCols / 2 - 3) * innerCols < need && innerCols < 60) innerCols += 2;
 
-  // Body rows = enough cells to hold all text + photo (with a little slack
-  // for whitespace and word boundaries).
-  const slack = Math.ceil(bodyW * 0.10) + 4;
-  const cellsNeeded = bodyW + slack + photoCols * photoRows;
-  let bodyRows = Math.max(1, Math.ceil(cellsNeeded / innerCols));
-  if (hasPhoto && bodyRows < photoRows + 1) bodyRows = photoRows + 1;
+  // Always at least wide enough for the header.
+  if (headerW + 2 > innerCols) innerCols = headerW + 2;
+  if (innerCols % 2 === 1)     innerCols += 1;
 
-  // Inner rows = header + rule + body. Body-less mode (just a name tag) is
-  // intentionally not used here — every story includes its body now.
-  const innerRows = 2 + bodyRows;
+  // If a photo is present, must be wide enough to hold it with a bit of
+  // breathing room.
+  if (hasPhoto && innerCols < PHOTO_CELLS_W + 4) innerCols = PHOTO_CELLS_W + 4;
+
+  innerCols = Math.min(innerCols, 60);
+  const innerRows = innerCols / 2 - 1;
 
   story._boxCells = { innerCols, innerRows };
   return story._boxCells;
@@ -952,40 +952,48 @@ function renderStories() {
     const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
     if (!story) continue;
     ensureStoryPrepared(story);
-    hasPhotos = true; // keep the render loop spinning while boxes are visible
+    hasPhotos = true;
 
-    // Box dimensions are content-driven — sized once per story to fit all
-    // its text + photo. No zoom-based scaling.
+    // Card scale ramps from BOX_START_SCALE (1/3) at BOX_FADE_START up to
+    // 1.0 at MAX_SCALE. The natural cell layout is computed once per story;
+    // we just stretch it on screen via ctx transform.
+    const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
+    const cardScale = BOX_START_SCALE + _t * (1 - BOX_START_SCALE);
+
+    // Native cell-grid dimensions (content-driven, square in screen px).
     const { innerCols, innerRows } = computeBoxSize(story);
     const boxCols = innerCols + 2;
     const boxRows = innerRows + 2;
-    const boxW = boxCols * cellW;
-    const boxH = boxRows * cellH;
+    const natW = boxCols * cellW;
+    const natH = boxRows * cellH;
+    const effW = natW * cardScale;
+    const effH = natH * cardScale;
 
-    // Box screen-space top-left: marker + screen offset + drag offset (world × s).
+    // Effective screen-space top-left of the card (after scaling).
     const dragSx = (cluster.dx || 0) * s;
     const dragSy = (cluster.dy || 0) * s;
     const boxLeft = mx + MARKER_BOX_OFFSET_X + dragSx;
-    const boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - boxH;
+    const boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - effH;
 
-    // Photo size scales with box: ~50% of inner width, capped to body height.
-    // We compute it before laying out the body text so reflow knows what
-    // cells to leave open.
-    const innerLeftPx = boxLeft + cellW;          // inside the │
-    const headerSize  = boxRows >= 5 ? 2 : 0;     // header row + rule row
-    const bodyTopRowI = 1 + headerSize;
-    const bodyTopPx   = boxTop + bodyTopRowI * cellH;
-    const bodyBotPx   = boxTop + (boxRows - 1) * cellH;
+    // Header takes 2 rows (header + rule). Photo, if present, lives in the
+    // body region centered with float drift. All math here is in NATIVE cell
+    // coords — we scale once at draw time.
+    const headerRows = 2;
+    const bodyTopRowI = 1 + headerRows;
+    const bodyTopY    = bodyTopRowI * cellH;
+    const bodyBotY    = (boxRows - 1) * cellH;
+    const innerLeftX  = cellW;            // inside the │
     const innerW      = innerCols * cellW;
-    const innerBodyH  = bodyBotPx - bodyTopPx;
+    const innerBodyH  = bodyBotY - bodyTopY;
 
     let photoOcc = null;
-    let photoLeft = 0, photoTop = 0, photoSize = 0;
-    const havePhoto = !!story.photoImg && innerW > 60 && innerBodyH > 50;
+    let photoLeft = 0, photoTop = 0;
+    const photoSize  = PHOTO_CELLS_W * cellW;   // == PHOTO_CELLS_H * cellH (square)
+    const havePhoto  = !!story.photoImg
+                       && innerCols >= PHOTO_CELLS_W + 4
+                       && (innerRows - headerRows) >= PHOTO_CELLS_H + 1;
     if (havePhoto) {
-      photoSize = Math.min(120, Math.floor(Math.min(innerW * 0.55, innerBodyH * 0.85)));
-
-      // Drift physics — bouncing inside the body region.
+      // Drift physics in native px (scale applied at render time).
       const f = story.float;
       const maxOx = (innerW - photoSize) / 2 - 4;
       const maxOy = (innerBodyH - photoSize) / 2 - 4;
@@ -996,41 +1004,36 @@ function renderStories() {
       } else {
         f.ox = 0; f.oy = 0;
       }
-      photoLeft = innerLeftPx + innerW / 2 + f.ox - photoSize / 2;
-      photoTop  = bodyTopPx + innerBodyH / 2 + f.oy - photoSize / 2;
+      photoLeft = innerLeftX + innerW / 2 + f.ox - photoSize / 2;
+      photoTop  = bodyTopY  + innerBodyH / 2 + f.oy - photoSize / 2;
 
-      // Per-body-row cell occupancy from the silhouette's alpha bounds.
+      // Cell occupancy from silhouette alpha bounds (native cells).
       if (story.photoBounds) {
         photoOcc = new Array(innerRows).fill(null);
-        for (let br = 0; br < innerRows; br++) {
-          const rowY = bodyTopPx + br * cellH;
-          // Skip rows that don't fall inside the body region.
-          if (br < headerSize) continue;
+        for (let br = headerRows; br < innerRows; br++) {
+          const rowY = bodyTopY + (br - headerRows) * cellH;
           const r = getPhotoOccupiedRange(
             story.photoBounds, photoLeft, photoTop, photoSize, rowY, cellH);
           if (!r) continue;
-          // Convert screen px range → cell columns relative to inner area.
-          const colStart = Math.max(0, Math.floor((r.pLeft  - innerLeftPx) / cellW));
-          const colEnd   = Math.min(innerCols - 1, Math.ceil((r.pRight - innerLeftPx) / cellW) - 1);
+          const colStart = Math.max(0, Math.floor((r.pLeft  - innerLeftX) / cellW));
+          const colEnd   = Math.min(innerCols - 1, Math.ceil((r.pRight - innerLeftX) / cellW) - 1);
           if (colEnd >= colStart) {
-            // body-row index inside buildStoryGrid is offset by headerSize
-            photoOcc[br - headerSize] = { colStart, colEnd };
+            photoOcc[br - headerRows] = { colStart, colEnd };
           }
         }
       }
     }
 
-    // Build content (text reflows around photoOcc, photo cells stay empty).
     const { grid, arrowSpan } = buildStoryGrid(
       story, cluster, innerCols, innerRows, photoOcc);
 
-    // White background knock-out for crisp box over the map.
+    // Knock out a white background sized to the EFFECTIVE rect.
     ctx.fillStyle = PAPER;
-    ctx.fillRect(boxLeft - 1, boxTop - 1, boxW + 2, boxH + 2);
+    ctx.fillRect(boxLeft - 1, boxTop - 1, effW + 2, effH + 2);
 
-    // Leader line from marker to nearest point on the box AABB.
-    const lx = clamp(mx, boxLeft, boxLeft + boxW);
-    const ly = clamp(my, boxTop, boxTop + boxH);
+    // Leader line from marker to nearest point on the effective rect.
+    const lx = clamp(mx, boxLeft, boxLeft + effW);
+    const ly = clamp(my, boxTop, boxTop + effH);
     ctx.save();
     ctx.strokeStyle = INK;
     ctx.lineWidth = 0.8;
@@ -1040,45 +1043,48 @@ function renderStories() {
     ctx.stroke();
     ctx.restore();
 
-    // Render the grid PER CELL — keeps frame chars and CJK glyphs aligned
-    // regardless of the canvas's actual measured glyph widths.
+    // Render the grid + photo with a single scale transform. fillText etc.
+    // all happen at native cell coords; the transform projects to effective
+    // screen px so cards shrink/grow uniformly with zoom.
     ctx.save();
+    ctx.translate(boxLeft, boxTop);
+    ctx.scale(cardScale, cardScale);
+
     ctx.font = FONT;
     ctx.fillStyle = INK;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
     for (let r = 0; r < boxRows; r++) {
-      const yy = boxTop + r * cellH;
+      const yy = r * cellH;
       for (let c = 0; c < boxCols; c++) {
         const ch = grid[r][c];
         if (!ch || ch === " ") continue;
-        ctx.fillText(ch, boxLeft + c * cellW, yy);
+        ctx.fillText(ch, c * cellW, yy);
       }
     }
-    ctx.restore();
 
-    // Photo on top, clipped to the box interior so drift never escapes.
     if (havePhoto) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(boxLeft + cellW, bodyTopPx, innerW, innerBodyH);
+      ctx.rect(innerLeftX, bodyTopY, innerW, innerBodyH);
       ctx.clip();
       ctx.drawImage(story.photoImg, photoLeft, photoTop, photoSize, photoSize);
       ctx.restore();
     }
 
-    // Hit-test rect for drag.
-    cluster._boxRect = { x: boxLeft, y: boxTop, w: boxW, h: boxH };
+    ctx.restore();
 
-    // Arrow click zone: the [n/N →] span on the bottom border.
+    // Hit-test rects in screen-space (effective dimensions).
+    cluster._boxRect = { x: boxLeft, y: boxTop, w: effW, h: effH };
+
     if (arrowSpan) {
       clusterArrowHits.push({
         cluster,
         aabb: {
-          x: boxLeft + arrowSpan.col * cellW,
-          y: boxTop + (boxRows - 1) * cellH,
-          w: arrowSpan.len * cellW,
-          h: cellH,
+          x: boxLeft + arrowSpan.col * cellW * cardScale,
+          y: boxTop + (boxRows - 1) * cellH * cardScale,
+          w: arrowSpan.len * cellW * cardScale,
+          h: cellH * cardScale,
         },
       });
     }
