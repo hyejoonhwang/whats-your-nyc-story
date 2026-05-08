@@ -8,6 +8,28 @@
 </head>
 <body>
   <canvas id="map"></canvas>
+  <aside id="intro" class="open">
+    <button id="intro-close" type="button" aria-label="collapse">×</button>
+    <div id="intro-content">
+      <div id="intro-title">[ WHAT'S YOUR NYC STORY ]</div>
+      <div class="intro-section">
+        <p>everyone has their own version of nyc — on every corner, in every building.</p>
+        <p>we live in the same city, but is it really the same?</p>
+        <p>i'd love to know what nyc means to you, and what stories you hold.</p>
+      </div>
+      <div class="intro-section">
+        <p class="intro-h">HOW TO LEAVE A STORY</p>
+        <ol>
+          <li>zoom in and click where your story lives.</li>
+          <li>write your name, the place, and what happened.</li>
+          <li>take a selfie.</li>
+          <li>hit [ leave it here ].</li>
+        </ol>
+      </div>
+      <button id="intro-ok" type="button">[ ok, got it ]</button>
+    </div>
+    <button id="intro-handle" type="button">[ ? what's your nyc story ]</button>
+  </aside>
   <div id="writer" hidden>
     <div class="writer-hd">
       <span id="writer-loc">—</span>
@@ -39,6 +61,6 @@
   </div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="grid.js?v=5"></script>
-  <script type="module" src="app.js?v=63"></script>
+  <script type="module" src="app.js?v=64"></script>
 </body>
 </html>

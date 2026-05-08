@@ -520,107 +520,10 @@ function renderMapBackground() {
   ctx.restore();
 }
 
-// ============================================================================
-// ASCII intro panel — fixed in screen space, upper-left of the viewport.
-// Pure box-drawn frame with three sections: title / personal note / how-to.
-// Drawn cell-by-cell at INTRO_LH line height in monospace.
-// ============================================================================
-const INTRO_X = 24;
-const INTRO_Y = 24;
-const INTRO_FONT_SIZE = 11;
-const INTRO_LH = 14;
-const INTRO_COLS = 30;       // total width in chars (incl. side borders)
-
-function repeat(ch, n) { return n > 0 ? new Array(n + 1).join(ch) : ""; }
-
-// Pads to width and inserts inside a row: "│ text          │"
-function introRow(text) {
-  const inner = INTRO_COLS - 2;
-  const t = (text || "").slice(0, inner);
-  return "│" + t + repeat(" ", inner - t.length) + "│";
-}
-
-// Section separator: ├──────────────┤
-function introRule() {
-  return "├" + repeat("─", INTRO_COLS - 2) + "┤";
-}
-
-function buildIntroLines() {
-  const lines = [];
-  // Top frame
-  lines.push("┌" + repeat("─", INTRO_COLS - 2) + "┐");
-  // Title block — letter-spaced caps centered.
-  const title = "WHAT'S YOUR NYC STORY";
-  const padL = Math.floor((INTRO_COLS - 2 - title.length) / 2);
-  lines.push(introRow(repeat(" ", padL) + title));
-  lines.push(introRule());
-
-  // Personal note section
-  lines.push(introRow(""));
-  lines.push(introRow(" everyone has their"));
-  lines.push(introRow(" own version of nyc —"));
-  lines.push(introRow(" on every corner,"));
-  lines.push(introRow(" in every building."));
-  lines.push(introRow(""));
-  lines.push(introRow(" we live in the same"));
-  lines.push(introRow(" city, but is it"));
-  lines.push(introRow(" really the same?"));
-  lines.push(introRow(""));
-  lines.push(introRow(" i'd love to know"));
-  lines.push(introRow(" what nyc means to"));
-  lines.push(introRow(" you, and what"));
-  lines.push(introRow(" stories you hold."));
-  lines.push(introRow(""));
-  lines.push(introRule());
-
-  // How-to section
-  lines.push(introRow(""));
-  lines.push(introRow(" HOW TO LEAVE A STORY"));
-  lines.push(introRow(""));
-  lines.push(introRow(" 1. zoom in and click"));
-  lines.push(introRow("    where your story"));
-  lines.push(introRow("    lives."));
-  lines.push(introRow(""));
-  lines.push(introRow(" 2. write your name,"));
-  lines.push(introRow("    the place, and"));
-  lines.push(introRow("    what happened."));
-  lines.push(introRow(""));
-  lines.push(introRow(" 3. take a selfie."));
-  lines.push(introRow(""));
-  lines.push(introRow(" 4. hit"));
-  lines.push(introRow("    [ leave it here ]"));
-  lines.push(introRow(""));
-  // Bottom frame
-  lines.push("└" + repeat("─", INTRO_COLS - 2) + "┘");
-  return lines;
-}
-
-const _INTRO_LINES = buildIntroLines();
-
-function renderIntroPanel() {
-  ctx.save();
-  ctx.font = `${INTRO_FONT_SIZE}px ${FONT_FAMILY}`;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  // Knock out a white background so map outlines underneath don't bleed
-  // through the panel — keeps the ASCII art crisp.
-  const cw = ctx.measureText("M").width;
-  const panelW = INTRO_COLS * cw + 4;
-  const panelH = _INTRO_LINES.length * INTRO_LH + 4;
-  ctx.fillStyle = PAPER;
-  ctx.fillRect(INTRO_X - 2, INTRO_Y - 2, panelW, panelH);
-
-  ctx.fillStyle = INK;
-  let y = INTRO_Y;
-  for (const line of _INTRO_LINES) {
-    ctx.fillText(line, INTRO_X, y);
-    y += INTRO_LH;
-  }
-  ctx.restore();
-}
-
 // ---- render ----
+// (Intro panel is now a DOM <aside> overlay — see #intro in index.html.
+// That way clicks on it don't fall through to the map, and we get
+// proper responsive collapse for free via CSS.)
 function render() {
   const W = window.innerWidth;
   const H = window.innerHeight;
@@ -632,9 +535,6 @@ function render() {
   renderStories();
   renderDrafts();
   renderPeerCursors();
-
-  // ASCII intro panel — last so it overlays everything except HUD.
-  renderIntroPanel();
 
   // HUD — minimalist black on white.
   ctx.fillStyle = INK_MUTED;
@@ -1662,14 +1562,24 @@ function openWriter(wx, wy, nearX, nearY) {
   authoringWy = wy;
   writerLoc.textContent = `(${wx.toFixed(0)}, ${wy.toFixed(0)})`;
   writerEl.hidden = false;
-  // Position near the click, kept on screen.
-  const rect = writerEl.getBoundingClientRect();
-  const w = rect.width || 260;
-  const h = rect.height || 220;
-  const x = Math.min(window.innerWidth - w - 12, Math.max(12, nearX + 16));
-  const y = Math.min(window.innerHeight - h - 12, Math.max(12, nearY + 16));
-  writerEl.style.left = x + "px";
-  writerEl.style.top = y + "px";
+  // First-pass placement near the click; clamped after layout below.
+  writerEl.style.left = (nearX + 16) + "px";
+  writerEl.style.top  = (nearY + 16) + "px";
+  // Re-measure on next frame so the real laid-out height (camera section,
+  // confirm overlay, etc.) is known, then clamp inside the viewport. The
+  // CSS max-height + overflow-y:auto guarantees the panel can never be
+  // taller than the viewport, so the submit button is always reachable.
+  requestAnimationFrame(() => {
+    const margin = 12;
+    const rect = writerEl.getBoundingClientRect();
+    let x = nearX + 16, y = nearY + 16;
+    if (x + rect.width  > window.innerWidth  - margin) x = window.innerWidth  - rect.width  - margin;
+    if (y + rect.height > window.innerHeight - margin) y = window.innerHeight - rect.height - margin;
+    if (x < margin) x = margin;
+    if (y < margin) y = margin;
+    writerEl.style.left = x + "px";
+    writerEl.style.top  = y + "px";
+  });
   writerName.focus();
   startCamera();
   broadcastDraft();
@@ -1741,6 +1651,35 @@ writerSubmit.addEventListener("click", async () => {
     setTimeout(() => (writerSubmit.textContent = "[ leave it here ]"), 3000);
   }
 });
+
+// ---- intro panel ----
+// DOM-based panel; CSS handles desktop / mobile-modal layouts. JS just
+// toggles between .open and .closed, persisting the choice for the session
+// so the modal-on-mobile only intrudes once.
+(() => {
+  const introEl = document.getElementById("intro");
+  const introOk = document.getElementById("intro-ok");
+  const introClose = document.getElementById("intro-close");
+  const introHandle = document.getElementById("intro-handle");
+  if (!introEl) return;
+
+  const dismissed = localStorage.getItem("intro_dismissed") === "1";
+  introEl.classList.toggle("open", !dismissed);
+  introEl.classList.toggle("closed", dismissed);
+
+  function open() {
+    introEl.classList.add("open");
+    introEl.classList.remove("closed");
+  }
+  function close() {
+    introEl.classList.remove("open");
+    introEl.classList.add("closed");
+    try { localStorage.setItem("intro_dismissed", "1"); } catch (e) {}
+  }
+  introOk.addEventListener("click", close);
+  introClose.addEventListener("click", close);
+  introHandle.addEventListener("click", open);
+})();
 
 // ---- init ----
 window.addEventListener("resize", resize);
