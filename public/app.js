@@ -1656,19 +1656,24 @@ writerSubmit.addEventListener("click", async () => {
     const postedWx = authoringWx;
     const postedWy = authoringWy;
     closeWriter(false);
-    // Pan + zoom to the new pin so the user can see their card materialize
-    // on the map, then refresh after 5 s so the welcome panel returns and
-    // /stories is freshly reloaded.
+    // Slam to MAX_SCALE so the just-posted card is at its full natural
+    // size — photo visible, all text revealed. We DON'T refresh; leaving
+    // the map zoomed in on a real story is more inviting for the next
+    // person walking up than a blank welcome view.
     if (postedWx != null && postedWy != null) {
-      // Slam to MAX_SCALE so the card is at its full natural size — photo
-      // visible, all text revealed.
       view.scale = MAX_SCALE;
       view.tx = window.innerWidth  / 2 - postedWx * MAX_SCALE;
       view.ty = window.innerHeight / 2 - postedWy * MAX_SCALE;
       updateTier();
       render();
     }
-    setTimeout(() => location.reload(), 5000);
+    // Re-open the intro panel so the welcome resurfaces alongside the
+    // zoomed-in card — the next visitor sees both at once.
+    const introEl = document.getElementById("intro");
+    if (introEl) {
+      introEl.classList.add("open");
+      introEl.classList.remove("closed");
+    }
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
