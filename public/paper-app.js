@@ -1831,6 +1831,8 @@ function closeWriter(cancel = true) {
   writerName.value = "";
   writerSpot.value = "";
   writerStory.value = "";
+  writerSubmit.textContent = "leave it here";
+  writerSubmit.disabled = false;
 }
 
 function broadcastDraft() {
@@ -1851,6 +1853,7 @@ writerClose.addEventListener("click", () => closeWriter(true));
 
 writerSubmit.addEventListener("click", async () => {
   if (authoringWx == null) return;
+  if (writerSubmit.disabled) return;
   const name = writerName.value.trim();
   const spot = writerSpot.value.trim();
   const story = writerStory.value.trim();
@@ -1859,20 +1862,34 @@ writerSubmit.addEventListener("click", async () => {
     setTimeout(() => (writerSubmit.textContent = "leave it here"), 1500);
     return;
   }
-  const res = await fetch("/submit", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      wx: authoringWx,
-      wy: authoringWy,
-      name,
-      spot,
-      story,
-      title: story.slice(0, 20),
-      photo: capturedPhoto || null,
-    }),
-  });
-  const data = await res.json();
+  // Disable + show "moderating…" while the moderation roundtrip runs.
+  // Prevents double-posts on impatient double-taps.
+  writerSubmit.disabled = true;
+  const origLabel = writerSubmit.textContent;
+  writerSubmit.textContent = "moderating…";
+  let data;
+  try {
+    const res = await fetch("/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wx: authoringWx,
+        wy: authoringWy,
+        name,
+        spot,
+        story,
+        title: story.slice(0, 20),
+        photo: capturedPhoto || null,
+      }),
+    });
+    data = await res.json();
+  } catch (err) {
+    console.warn("submit failed:", err);
+    writerSubmit.textContent = "network error — try again";
+    setTimeout(() => (writerSubmit.textContent = origLabel), 3000);
+    writerSubmit.disabled = false;
+    return;
+  }
   if (data.success) {
     socket.emit("draft:cancel");
     const postedWx = authoringWx;
@@ -1901,6 +1918,7 @@ writerSubmit.addEventListener("click", async () => {
     writerSubmit.textContent = data.message || "couldn't post";
     setTimeout(() => (writerSubmit.textContent = "leave it here"), 3000);
   }
+  writerSubmit.disabled = false;
 });
 
 // ---- comments ----
