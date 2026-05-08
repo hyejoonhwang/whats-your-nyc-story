@@ -2248,7 +2248,6 @@ commentsSubmit.addEventListener("click", async () => {
 // the welcome at the top of every session.
 (() => {
   const introEl = document.getElementById("intro");
-  const introOk = document.getElementById("intro-ok");
   const introClose = document.getElementById("intro-close");
   const introHandle = document.getElementById("intro-handle");
   if (!introEl) return;
@@ -2256,9 +2255,8 @@ commentsSubmit.addEventListener("click", async () => {
   introEl.classList.remove("closed");
   function open() { introEl.classList.add("open"); introEl.classList.remove("closed"); }
   function close() { introEl.classList.remove("open"); introEl.classList.add("closed"); }
-  introOk.addEventListener("click", close);
-  introClose.addEventListener("click", close);
-  introHandle.addEventListener("click", open);
+  if (introClose)  introClose.addEventListener("click", close);
+  if (introHandle) introHandle.addEventListener("click", open);
 })();
 
 // ---- init ----
