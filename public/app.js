@@ -1338,6 +1338,15 @@ async function handleCanvasClick(sx, sy) {
     closeWriter(true);
     return;
   }
+  // If the intro panel is open, any click outside it (which is what reaches
+  // this canvas handler — DOM <aside> absorbs clicks on the panel itself)
+  // dismisses it. Don't fall through to writer / comments.
+  const introEl = document.getElementById("intro");
+  if (introEl && introEl.classList.contains("open")) {
+    introEl.classList.remove("open");
+    introEl.classList.add("closed");
+    return;
+  }
   // Arrow buttons on stacked post-its take priority.
   if (handleArrowClick(sx, sy)) return;
   // Click landed on a story card → open the comments panel for it.
