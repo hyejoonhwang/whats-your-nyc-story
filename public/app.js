@@ -194,8 +194,13 @@ function fitToViewport() {
   const fit = Math.min((W - pad * 2) / GRID_W, (H - pad * 2) / GRID_H);
   _zoomFloor = fit;
   view.scale = DEFAULT_ZOOM;
-  view.tx = (W - GRID_W * DEFAULT_ZOOM) / 2;
-  view.ty = (H - GRID_H * DEFAULT_ZOOM) / 2;
+  // Open with Manhattan parked in the upper-right area of the screen so the
+  // intro panel in the upper-left has clear room and Brooklyn/Queens flow
+  // downward into view. (Centering the whole world grid puts the geometric
+  // middle near central Brooklyn — too far south for a "welcome" composition.)
+  const [manhattanWX, manhattanWY] = lonLatToWorld([-73.965, 40.789]);
+  view.tx = W * 0.58 - manhattanWX * DEFAULT_ZOOM;
+  view.ty = H * 0.18 - manhattanWY * DEFAULT_ZOOM;
   updateTier();
 }
 
