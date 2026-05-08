@@ -36,15 +36,15 @@ const INK_FAINT = "rgba(0,0,0,0.30)";   // (still used as faint accent)
 const MAP_GREY = "#c8c8c8";             // every line on the map
 const PAPER = "#fff";
 
-// Story box sizing. Cards appear at BOX_FADE_START at the smallest cell-grid
-// (BOX_MIN_INNER_COLS × BOX_MIN_INNER_ROWS) and grow toward each story's own
-// natural-max footprint at MAX_SCALE. Font size is fixed (FONT_SIZE) at every
+// Story box sizing. Cards pop in at BOX_FADE_START as a 1×1-cell stamp
+// holding just the first letter of the name, then grow toward each story's
+// per-content natural-max footprint at MAX_SCALE. Font size is fixed at every
 // zoom — only the cell COUNT grows, so Pretext re-breaks the prepared text at
 // each new width and more letters appear as the box widens.
 const BOX_PAD = 4;
-const BOX_FADE_START = 15;                      // cards appear only after ~15× zoom
-const BOX_MIN_INNER_COLS = 8;                   // smallest body width when card first appears
-const BOX_MIN_INNER_ROWS = 3;                   // smallest body height (header + rule + 1 body row)
+const BOX_FADE_START = 10;                      // cards appear only after ~10× zoom
+const BOX_MIN_INNER_COLS = 1;                   // smallest body width when card first appears
+const BOX_MIN_INNER_ROWS = 1;                   // smallest body height
 const MARKER_BOX_OFFSET_X = 22;
 const MARKER_BOX_OFFSET_Y = -22;
 // Uniform photo dimensions (in cells) across every card. Cell aspect 1:2
@@ -954,17 +954,19 @@ function renderStories() {
     ensureStoryPrepared(story);
     hasPhotos = true;
 
-    // CURRENT cell-grid dimensions: lerp from a small uniform minimum at
-    // BOX_FADE_START to each story's per-content NATURAL max at MAX_SCALE.
-    // The font stays at FONT_SIZE (10px) at every zoom — only the cell COUNT
-    // grows, so Pretext re-breaks the prepared text at each new width and
-    // additional letters surface as the box widens.
+    // CURRENT cell-grid dimensions: lerp from a 1×1 stamp at BOX_FADE_START
+    // to each story's per-content NATURAL max at MAX_SCALE. The font stays
+    // at FONT_SIZE (10px) at every zoom — only the cell COUNT grows, so
+    // Pretext re-breaks the prepared text at each new width and additional
+    // letters surface as the box widens.
     const natural = computeBoxSize(story);
     const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
     let innerCols = Math.round(BOX_MIN_INNER_COLS + _t * (natural.innerCols - BOX_MIN_INNER_COLS));
     let innerRows = Math.round(BOX_MIN_INNER_ROWS + _t * (natural.innerRows - BOX_MIN_INNER_ROWS));
-    if (innerCols % 2 === 1) innerCols += 1;          // keep boxCols even → boxRows = boxCols/2
-    innerCols = Math.min(innerCols, natural.innerCols);
+    // Snap to even ONLY when there's room for a real card. Below that we let
+    // the tiny stamp (innerCols=1) pass through so it shows just one letter.
+    if (innerCols >= 4 && innerCols % 2 === 1) innerCols += 1;
+    innerCols = Math.max(1, Math.min(innerCols, natural.innerCols));
     innerRows = Math.max(1, Math.min(innerRows, natural.innerRows));
 
     const boxCols = innerCols + 2;
