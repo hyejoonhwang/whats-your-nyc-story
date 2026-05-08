@@ -1325,8 +1325,12 @@ async function handleCanvasClick(sx, sy) {
     openComments(hitCluster, sx, sy);
     return;
   }
-  // Click hit empty land → close any open comments before placing a new pin.
-  if (!commentsEl.hidden) closeComments();
+  // If the comments panel is open, an outside-click should ONLY close it —
+  // not also place a new pin.
+  if (!commentsEl.hidden) {
+    closeComments();
+    return;
+  }
   // Otherwise place a new pin at the exact click coords — only on land.
   const w = screenToWorld(sx, sy);
   if (!isOnLand(w.x, w.y)) return;
@@ -1367,6 +1371,21 @@ function _renderComments(story) {
     item.appendChild(text);
     commentsList.appendChild(item);
   }
+}
+
+// Append a comment to story.comments only if it isn't already there.
+// Server's HTTP response and the socket broadcast carry the SAME comment
+// object (same timestamp + text), so whichever path arrives second is a
+// no-op. Returns true if appended.
+function _addCommentDedup(story, comment) {
+  if (!story.comments) story.comments = [];
+  for (const c of story.comments) {
+    if (c.timestamp === comment.timestamp && c.text === comment.text && c.name === comment.name) {
+      return false;
+    }
+  }
+  story.comments.push(comment);
+  return true;
 }
 
 function openComments(cluster, nearX, nearY) {
@@ -1420,13 +1439,11 @@ commentsSubmit.addEventListener("click", async () => {
     });
     const data = await res.json();
     if (data.success) {
-      // Local append so the just-posted comment is visible immediately;
-      // the socket broadcast arrives shortly and will re-render the same
-      // list (no flicker because the contents match).
+      // Optimistic local append (de-duped against the socket broadcast that
+      // will arrive shortly).
       const story = storiesById.get(_commentsStoryId);
       if (story) {
-        if (!story.comments) story.comments = [];
-        story.comments.push(data.comment);
+        _addCommentDedup(story, data.comment);
         _renderComments(story);
       }
       commentsName.value = "";
@@ -1833,13 +1850,8 @@ socket.on("story:commit", (s) => {
 socket.on("comment:add", ({ storyId, comment }) => {
   const story = storiesById.get(storyId);
   if (!story) return;
-  if (!story.comments) story.comments = [];
-  // Avoid duplicate from our own optimistic local append.
-  const last = story.comments[story.comments.length - 1];
-  if (!last || last.timestamp !== comment.timestamp || last.text !== comment.text) {
-    story.comments.push(comment);
-  }
-  if (_commentsStoryId === storyId) _renderComments(story);
+  const added = _addCommentDedup(story, comment);
+  if (added && _commentsStoryId === storyId) _renderComments(story);
 });
 
 socket.on("cursors:init", ({ self, peers: initial, drafts: initialDrafts }) => {
