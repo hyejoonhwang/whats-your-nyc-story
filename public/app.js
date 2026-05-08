@@ -1395,19 +1395,51 @@ function openComments(cluster, nearX, nearY) {
   commentsSpot.textContent = `[ ${(story.spot || "").slice(0, 30) || "—"} ]`;
   _renderComments(story);
   commentsEl.hidden = false;
-  // Position below-and-right of the click; clamp inside viewport once laid out.
-  commentsEl.style.left = (nearX + 16) + "px";
-  commentsEl.style.top  = (nearY + 16) + "px";
+
+  // Anchor the panel flush against the card's bottom-left corner so it
+  // reads as an extension of the card rather than a separate popup.
+  // Panel width matches the card when wide enough; otherwise expands to a
+  // usable minimum.
+  const cardR = cluster._boxRect;
+  const PANEL_MIN_W = 220;
+  const PANEL_MAX_W = 360;
+  let panelW;
+  let x, y;
+  if (cardR) {
+    panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, cardR.w));
+    x = cardR.x;
+    y = cardR.y + cardR.h;       // touching the bottom edge
+  } else {
+    panelW = PANEL_MIN_W;
+    x = nearX + 16;
+    y = nearY + 16;
+  }
+  commentsEl.style.width = panelW + "px";
+  commentsEl.style.left = x + "px";
+  commentsEl.style.top  = y + "px";
+
   requestAnimationFrame(() => {
     const margin = 12;
     const rect = commentsEl.getBoundingClientRect();
-    let x = nearX + 16, y = nearY + 16;
-    if (x + rect.width  > window.innerWidth  - margin) x = window.innerWidth  - rect.width  - margin;
-    if (y + rect.height > window.innerHeight - margin) y = window.innerHeight - rect.height - margin;
-    if (x < margin) x = margin;
-    if (y < margin) y = margin;
-    commentsEl.style.left = x + "px";
-    commentsEl.style.top  = y + "px";
+    let nx = parseFloat(commentsEl.style.left);
+    let ny = parseFloat(commentsEl.style.top);
+    // Horizontal clamp — keep the left edge aligned with the card when we can.
+    if (nx + rect.width > window.innerWidth - margin) {
+      nx = window.innerWidth - rect.width - margin;
+    }
+    if (nx < margin) nx = margin;
+    // Vertical: if there's no room below the card, flip above it instead.
+    if (ny + rect.height > window.innerHeight - margin) {
+      if (cardR) {
+        ny = cardR.y - rect.height;
+        if (ny < margin) ny = window.innerHeight - rect.height - margin;
+      } else {
+        ny = window.innerHeight - rect.height - margin;
+      }
+    }
+    if (ny < margin) ny = margin;
+    commentsEl.style.left = nx + "px";
+    commentsEl.style.top  = ny + "px";
     commentsName.focus();
   });
 }
