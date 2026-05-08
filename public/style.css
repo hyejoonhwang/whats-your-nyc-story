@@ -105,14 +105,16 @@ html, body {
 }
 
 /* Comments popup — anchored flush to the bottom of the story card so it
-   reads as an extension of the card rather than a separate popup. Width is
-   set inline by JS to match the card (clamped to a usable min/max). */
+   reads as an extension of the card. Distinct light-grey background +
+   dashed top border separate it from the card's white body without
+   feeling like a totally different popup. Width set inline by JS to
+   match the card (clamped to a usable min/max). */
 #comments {
   position: fixed;
   z-index: 10;
-  background: #fff;
+  background: #f4f4f4;            /* visual difference from card's white body */
   border: 1px solid #000;
-  border-top: none;            /* visually flows from the card's bottom edge */
+  border-top-style: dashed;       /* section divider — "comments below" */
   padding: 8px 10px 10px;
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
