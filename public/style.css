@@ -104,6 +104,99 @@ html, body {
   }
 }
 
+/* Comments popup — same B&W vocabulary as the writer. Opens beneath the
+   card the user clicked. */
+#comments {
+  position: fixed;
+  z-index: 10;
+  background: #fff;
+  border: 1px solid #000;
+  padding: 10px;
+  width: 240px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: inherit;
+  color: #000;
+}
+#comments[hidden] { display: none; }
+.comments-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px dashed #000;
+  padding-bottom: 6px;
+}
+#comments-close {
+  background: transparent;
+  border: 1px solid #000;
+  color: #000;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 6px;
+  line-height: 1;
+}
+#comments-close:hover { background: #000; color: #fff; }
+#comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+#comments-list:empty::before {
+  content: "no comments yet — be the first";
+  color: #888;
+  font-style: italic;
+}
+.comment-item {
+  border-left: 2px solid #000;
+  padding: 2px 6px;
+}
+.comment-author {
+  font-weight: bold;
+  letter-spacing: 0.3px;
+}
+.comment-text { display: block; margin-top: 1px; }
+#comments input,
+#comments textarea {
+  background: #fff;
+  border: 1px solid #000;
+  color: #000;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+  outline: none;
+  border-radius: 0;
+}
+#comments input::placeholder,
+#comments textarea::placeholder { color: #888; }
+#comments input:focus,
+#comments textarea:focus { background: #f4f4f4; }
+#comments-submit {
+  background: #fff;
+  color: #000;
+  border: 1px solid #000;
+  padding: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  border-radius: 0;
+}
+#comments-submit:hover { background: #000; color: #fff; }
+
 /* Writer popup — pure B&W, ASCII-flavored. */
 #writer {
   position: fixed;

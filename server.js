@@ -205,6 +205,28 @@ app.post("/story/:id/photo", async (req, res) => {
   res.json({ success: true });
 });
 
+// Append a comment to a story. Comments are stored on the story doc as a
+// growing array; broadcast to all sockets so any open client sees the new
+// comment land in real time.
+app.post("/story/:id/comment", async (req, res) => {
+  const { name, text } = req.body || {};
+  const cleanName = String(name || "").trim().slice(0, 40);
+  const cleanText = String(text || "").trim().slice(0, 300);
+  if (!cleanName || !cleanText) {
+    return res.json({ success: false, message: "please fill in name and comment" });
+  }
+  // Same hard-block list the story moderator uses — quick gate before write.
+  for (const p of HARD_BLOCK_PATTERNS) {
+    if (p.test(cleanName) || p.test(cleanText)) {
+      return res.json({ success: false, message: "comment can't be posted. please rephrase." });
+    }
+  }
+  const comment = { name: cleanName, text: cleanText, timestamp: Date.now() };
+  await stories.updateAsync({ _id: req.params.id }, { $push: { comments: comment } });
+  io.emit("comment:add", { storyId: req.params.id, comment });
+  res.json({ success: true, comment });
+});
+
 // Update a story's world position (used to migrate stories that landed in
 // water onto the nearest land cell).
 app.post("/story/:id/position", async (req, res) => {

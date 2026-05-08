@@ -1319,9 +1319,14 @@ async function handleCanvasClick(sx, sy) {
   }
   // Arrow buttons on stacked post-its take priority.
   if (handleArrowClick(sx, sy)) return;
-  // Click landed on a story card → consume the click; don't drop a new
-  // pin underneath the card.
-  if (_hitTestPostit(sx, sy)) return;
+  // Click landed on a story card → open the comments panel for it.
+  const hitCluster = _hitTestPostit(sx, sy);
+  if (hitCluster) {
+    openComments(hitCluster, sx, sy);
+    return;
+  }
+  // Click hit empty land → close any open comments before placing a new pin.
+  if (!commentsEl.hidden) closeComments();
   // Otherwise place a new pin at the exact click coords — only on land.
   const w = screenToWorld(sx, sy);
   if (!isOnLand(w.x, w.y)) return;
@@ -1335,6 +1340,107 @@ const writerSpot = document.getElementById("writer-spot");
 const writerStory = document.getElementById("writer-story");
 const writerClose = document.getElementById("writer-close");
 const writerSubmit = document.getElementById("writer-submit");
+
+// ---- comments ----
+const commentsEl     = document.getElementById("comments");
+const commentsSpot   = document.getElementById("comments-spot");
+const commentsList   = document.getElementById("comments-list");
+const commentsName   = document.getElementById("comments-name");
+const commentsText   = document.getElementById("comments-text");
+const commentsClose  = document.getElementById("comments-close");
+const commentsSubmit = document.getElementById("comments-submit");
+let _commentsStoryId = null;
+
+function _renderComments(story) {
+  commentsList.innerHTML = "";
+  const list = (story && story.comments) || [];
+  for (const c of list) {
+    const item = document.createElement("div");
+    item.className = "comment-item";
+    const author = document.createElement("span");
+    author.className = "comment-author";
+    author.textContent = c.name;
+    const text = document.createElement("span");
+    text.className = "comment-text";
+    text.textContent = c.text;
+    item.appendChild(author);
+    item.appendChild(text);
+    commentsList.appendChild(item);
+  }
+}
+
+function openComments(cluster, nearX, nearY) {
+  const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
+  if (!story || !story._id) return;
+  _commentsStoryId = story._id;
+  commentsSpot.textContent = `[ ${(story.spot || "").slice(0, 30) || "—"} ]`;
+  _renderComments(story);
+  commentsEl.hidden = false;
+  // Position below-and-right of the click; clamp inside viewport once laid out.
+  commentsEl.style.left = (nearX + 16) + "px";
+  commentsEl.style.top  = (nearY + 16) + "px";
+  requestAnimationFrame(() => {
+    const margin = 12;
+    const rect = commentsEl.getBoundingClientRect();
+    let x = nearX + 16, y = nearY + 16;
+    if (x + rect.width  > window.innerWidth  - margin) x = window.innerWidth  - rect.width  - margin;
+    if (y + rect.height > window.innerHeight - margin) y = window.innerHeight - rect.height - margin;
+    if (x < margin) x = margin;
+    if (y < margin) y = margin;
+    commentsEl.style.left = x + "px";
+    commentsEl.style.top  = y + "px";
+    commentsName.focus();
+  });
+}
+
+function closeComments() {
+  commentsEl.hidden = true;
+  _commentsStoryId = null;
+  commentsName.value = "";
+  commentsText.value = "";
+}
+
+commentsClose.addEventListener("click", closeComments);
+
+commentsSubmit.addEventListener("click", async () => {
+  if (!_commentsStoryId) return;
+  const name = commentsName.value.trim();
+  const text = commentsText.value.trim();
+  if (!name || !text) {
+    commentsSubmit.textContent = "fill in both";
+    setTimeout(() => (commentsSubmit.textContent = "[ post ]"), 1500);
+    return;
+  }
+  commentsSubmit.disabled = true;
+  try {
+    const res = await fetch(`/story/${_commentsStoryId}/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, text }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      // Local append so the just-posted comment is visible immediately;
+      // the socket broadcast arrives shortly and will re-render the same
+      // list (no flicker because the contents match).
+      const story = storiesById.get(_commentsStoryId);
+      if (story) {
+        if (!story.comments) story.comments = [];
+        story.comments.push(data.comment);
+        _renderComments(story);
+      }
+      commentsName.value = "";
+      commentsText.value = "";
+    } else {
+      commentsSubmit.textContent = data.message || "couldn't post";
+      setTimeout(() => (commentsSubmit.textContent = "[ post ]"), 2500);
+    }
+  } catch (err) {
+    console.warn("comment post failed:", err);
+  } finally {
+    commentsSubmit.disabled = false;
+  }
+});
 
 // ---- camera ----
 const cameraPreview = document.getElementById("camera-preview");
@@ -1723,6 +1829,17 @@ socket.on("connect", () => console.log("socket connected:", socket.id));
 socket.on("story:commit", (s) => {
   ingestStory(s);
   render();
+});
+socket.on("comment:add", ({ storyId, comment }) => {
+  const story = storiesById.get(storyId);
+  if (!story) return;
+  if (!story.comments) story.comments = [];
+  // Avoid duplicate from our own optimistic local append.
+  const last = story.comments[story.comments.length - 1];
+  if (!last || last.timestamp !== comment.timestamp || last.text !== comment.text) {
+    story.comments.push(comment);
+  }
+  if (_commentsStoryId === storyId) _renderComments(story);
 });
 
 socket.on("cursors:init", ({ self, peers: initial, drafts: initialDrafts }) => {

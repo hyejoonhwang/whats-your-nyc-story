@@ -30,6 +30,16 @@
     </div>
     <button id="intro-handle" type="button">[ ? what's your nyc story ]</button>
   </aside>
+  <div id="comments" hidden>
+    <div class="comments-hd">
+      <span id="comments-spot">—</span>
+      <button id="comments-close" type="button" aria-label="close">×</button>
+    </div>
+    <div id="comments-list"></div>
+    <input id="comments-name" type="text" placeholder="your name" maxlength="40" />
+    <textarea id="comments-text" rows="2" placeholder="leave a comment" maxlength="300"></textarea>
+    <button id="comments-submit" type="button">[ post ]</button>
+  </div>
   <div id="writer" hidden>
     <div class="writer-hd">
       <span id="writer-loc">—</span>
@@ -61,6 +71,6 @@
   </div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="grid.js?v=5"></script>
-  <script type="module" src="app.js?v=69"></script>
+  <script type="module" src="app.js?v=70"></script>
 </body>
 </html>
