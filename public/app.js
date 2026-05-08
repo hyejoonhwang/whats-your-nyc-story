@@ -181,21 +181,21 @@ function resize() {
 // the user can't zoom out past the initial "see all of NYC" view.
 let _zoomFloor = MIN_SCALE;
 
-// Default zoom is 1.23x of the natural fit-to-viewport scale, so the map
-// loads zoomed-in instead of fitting the whole grid. _zoomFloor is set to
-// the same value so the user can't zoom out below this default.
-const DEFAULT_ZOOM = 1.23;
+// Default zoom on load — chosen so streets just start to appear and there's
+// enough detail to feel oriented without cards yet (cards pop in at s=10).
+// _zoomFloor is the fit-to-grid scale so the user can still zoom out to the
+// full-NYC overview from here.
+const DEFAULT_ZOOM = 4.5;
 
 function fitToViewport() {
   const W = window.innerWidth;
   const H = window.innerHeight;
   const pad = 40;
   const fit = Math.min((W - pad * 2) / GRID_W, (H - pad * 2) / GRID_H);
-  const s = fit * DEFAULT_ZOOM;
-  _zoomFloor = s;
-  view.scale = s;
-  view.tx = (W - GRID_W * s) / 2;
-  view.ty = (H - GRID_H * s) / 2;
+  _zoomFloor = fit;
+  view.scale = DEFAULT_ZOOM;
+  view.tx = (W - GRID_W * DEFAULT_ZOOM) / 2;
+  view.ty = (H - GRID_H * DEFAULT_ZOOM) / 2;
   updateTier();
 }
 
@@ -1314,6 +1314,9 @@ async function handleCanvasClick(sx, sy) {
   }
   // Arrow buttons on stacked post-its take priority.
   if (handleArrowClick(sx, sy)) return;
+  // Click landed on a story card → consume the click; don't drop a new
+  // pin underneath the card.
+  if (_hitTestPostit(sx, sy)) return;
   // Otherwise place a new pin at the exact click coords — only on land.
   const w = screenToWorld(sx, sy);
   if (!isOnLand(w.x, w.y)) return;
@@ -1645,6 +1648,10 @@ writerSubmit.addEventListener("click", async () => {
   if (data.success) {
     socket.emit("draft:cancel");
     closeWriter(false);
+    // Hard refresh after a successful post so the user lands back on the
+    // intro screen, sees the welcome panel again, and the new pin is on
+    // the map from the freshly-loaded /stories list.
+    location.reload();
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
@@ -1653,9 +1660,10 @@ writerSubmit.addEventListener("click", async () => {
 });
 
 // ---- intro panel ----
-// DOM-based panel; CSS handles desktop / mobile-modal layouts. JS just
-// toggles between .open and .closed, persisting the choice for the session
-// so the modal-on-mobile only intrudes once.
+// DOM-based panel; CSS handles desktop / mobile-modal layouts. Always starts
+// expanded on every page load — first-time visitors and returning ones see
+// the welcome at the top of every session. The toggle still works within a
+// session so users can collapse it once they're done reading.
 (() => {
   const introEl = document.getElementById("intro");
   const introOk = document.getElementById("intro-ok");
@@ -1663,9 +1671,8 @@ writerSubmit.addEventListener("click", async () => {
   const introHandle = document.getElementById("intro-handle");
   if (!introEl) return;
 
-  const dismissed = localStorage.getItem("intro_dismissed") === "1";
-  introEl.classList.toggle("open", !dismissed);
-  introEl.classList.toggle("closed", dismissed);
+  introEl.classList.add("open");
+  introEl.classList.remove("closed");
 
   function open() {
     introEl.classList.add("open");
@@ -1674,7 +1681,6 @@ writerSubmit.addEventListener("click", async () => {
   function close() {
     introEl.classList.remove("open");
     introEl.classList.add("closed");
-    try { localStorage.setItem("intro_dismissed", "1"); } catch (e) {}
   }
   introOk.addEventListener("click", close);
   introClose.addEventListener("click", close);
