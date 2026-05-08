@@ -185,6 +185,84 @@ async function moderateStory({ name, spot, story }) {
   });
 }
 
+// ============================================================================
+// Photo moderation — Gemini 2.5 Flash with vision input. Same fail-open
+// behavior as text moderation (no API key / parse error / network error
+// → allow). Block obvious nudity / sexual content / graphic violence /
+// drug paraphernalia. Default ALLOW; ordinary selfies are fine.
+// ============================================================================
+async function moderatePhoto(photoDataUrl) {
+  if (!photoDataUrl) return { flagged: false };
+  if (!GEMINI_API_KEY) return { flagged: false };
+  // photoDataUrl is "data:image/png;base64,...." — pull the mime + b64.
+  const m = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(photoDataUrl);
+  if (!m) return { flagged: false };
+  const mimeType = m[1], base64Data = m[2];
+
+  const systemPrompt =
+    `You are a moderator for a public exhibit ("What's Your NYC Story?", an ITP show piece). ` +
+    `Classify the attached photo as BLOCK or ALLOW.\n\n` +
+    `BLOCK: nudity or partial nudity, sexual or sexually-suggestive content, ` +
+    `graphic violence or gore, hateful imagery (slur symbols, etc.), drug paraphernalia, ` +
+    `images that appear AI-generated to depict real public figures sexually or violently, ` +
+    `or photos clearly intended to harass.\n\n` +
+    `ALLOW: ordinary selfies (alone or in groups), faces of any expression, ` +
+    `casual indoor/outdoor settings, food, pets, places, kids in non-sexualized contexts, ` +
+    `art / drawings / abstract images, blurry or partial photos, photos with hand gestures ` +
+    `(thumbs up, peace sign), photos with people kissing or hugging non-explicitly. ` +
+    `The DEFAULT is ALLOW.\n\n` +
+    `Respond with ONLY the word BLOCK or ALLOW.`;
+
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({
+      contents: [{
+        parts: [
+          { text: "Please moderate this photo." },
+          { inline_data: { mime_type: mimeType, data: base64Data } },
+        ],
+      }],
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      generationConfig: { temperature: 0, maxOutputTokens: 10 },
+    });
+    const opts = {
+      hostname: "generativelanguage.googleapis.com",
+      path: "/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_API_KEY,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData),
+      },
+    };
+    const reqApi = https.request(opts, (r) => {
+      let body = "";
+      r.on("data", (c) => { body += c; });
+      r.on("end", () => {
+        try {
+          const data = JSON.parse(body);
+          let answer = "";
+          if (data.candidates && data.candidates[0]?.content?.parts) {
+            for (const p of data.candidates[0].content.parts) {
+              if (p.text) answer = p.text.trim().toUpperCase();
+            }
+          }
+          const flagged = answer.includes("BLOCK");
+          console.log(`Gemini photo moderation: ${mimeType} (${base64Data.length} chars) → ${answer || "(empty)"}`);
+          resolve({ flagged, reason: flagged ? "photo flagged" : null });
+        } catch (e) {
+          console.error("Gemini photo parse error:", e.message);
+          resolve({ flagged: false });
+        }
+      });
+    });
+    reqApi.on("error", (err) => {
+      console.error("Gemini photo request error:", err.message);
+      resolve({ flagged: false });
+    });
+    reqApi.write(postData);
+    reqApi.end();
+  });
+}
+
 app.get("/stories", async (req, res) => {
   const all = await stories.findAsync({});
   res.json({ stories: all });
@@ -248,6 +326,16 @@ app.post("/submit", async (req, res) => {
       success: false,
       message: "your story can't be posted. please rephrase.",
     });
+  }
+  // Photo moderation. Same fail-open behavior. Skipped if no photo attached.
+  if (photo) {
+    const photoMod = await moderatePhoto(photo);
+    if (photoMod.flagged) {
+      return res.json({
+        success: false,
+        message: "your photo can't be posted. please try a different one.",
+      });
+    }
   }
   // Backward compat: derive wx/wy from dotIndex if client only sent the latter.
   const COLS = 58, BASE_CELL = 12;

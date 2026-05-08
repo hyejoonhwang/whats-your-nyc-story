@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>What's Your NYC Story? — paper</title>
+  <link rel="stylesheet" href="paper-style.css">
+  <style>
+    /* Mode toggle — sits in the bottom-right of the viewport. Plain
+       paper-style button so it doesn't clash with the corkboard. */
+    #mode-toggle {
+      position: fixed;
+      right: 12px;
+      bottom: 10px;
+      z-index: 50;
+      background: rgba(255, 248, 230, 0.92);
+      color: rgba(75, 45, 20, 0.85);
+      border: 1px solid rgba(75, 45, 20, 0.45);
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #mode-toggle:hover { background: rgba(255, 252, 240, 1); }
+  </style>
+</head>
+<body>
+  <canvas id="map"></canvas>
+  <div id="writer" hidden>
+    <div class="writer-hd">
+      <span id="writer-loc">—</span>
+      <button id="writer-close" type="button" aria-label="close">×</button>
+    </div>
+    <input id="writer-name" type="text" placeholder="your name" maxlength="40" />
+    <input id="writer-spot" type="text" placeholder="what's this spot?" maxlength="60" />
+    <textarea id="writer-story" rows="4" placeholder="what happened here?" maxlength="500"></textarea>
+    <div id="camera-section">
+      <video id="camera-preview" autoplay playsinline muted></video>
+      <canvas id="camera-snap" width="80" height="80"></canvas>
+      <img id="camera-thumb" alt="" hidden />
+      <div id="camera-controls">
+        <button id="btn-capture" type="button">take photo</button>
+        <button id="btn-retake" type="button" hidden>retake</button>
+      </div>
+    </div>
+    <button id="writer-submit" type="button">leave it here</button>
+    <div id="writer-confirm" hidden>
+      <div class="writer-confirm-text">
+        close without saving?<br>
+        <span class="writer-confirm-sub">your story won't be saved.</span>
+      </div>
+      <div class="writer-confirm-buttons">
+        <button id="writer-confirm-no" type="button">cancel</button>
+        <button id="writer-confirm-yes" type="button">close</button>
+      </div>
+    </div>
+  </div>
+  <a id="mode-toggle" href="/">[ try the ascii version → ]</a>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="grid.js?v=5"></script>
+  <script type="module" src="paper-app.js?v=1"></script>
+</body>
+</html>
