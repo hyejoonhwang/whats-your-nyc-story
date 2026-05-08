@@ -9,6 +9,97 @@ html, body {
   color: #e8e8e8;
 }
 
+/* Comments panel — paper-themed (cream + sepia ink). Anchored flush to a
+   post-it's bottom edge by JS so it reads as an extension of the card. */
+#comments {
+  position: fixed;
+  z-index: 10;
+  background: #fbf3da;
+  border: 1px dashed rgba(75, 45, 20, 0.55);
+  padding: 8px 10px 10px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: inherit;
+  color: rgba(60, 35, 10, 0.92);
+  box-shadow: 0 4px 14px rgba(60, 35, 10, 0.18);
+}
+#comments[hidden] { display: none; }
+.comments-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px dashed rgba(75, 45, 20, 0.55);
+  padding-bottom: 6px;
+  color: rgba(75, 45, 20, 0.85);
+}
+#comments-close {
+  background: transparent;
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  color: rgba(60, 35, 10, 0.92);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 6px;
+  line-height: 1;
+}
+#comments-close:hover { background: rgba(75, 45, 20, 0.85); color: #fbf3da; }
+#comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+#comments-list:empty::before {
+  content: "no comments yet — be the first";
+  color: rgba(75, 45, 20, 0.5);
+  font-style: italic;
+}
+.comment-item {
+  border-left: 2px solid rgba(75, 45, 20, 0.7);
+  padding: 2px 6px;
+}
+.comment-author { font-weight: bold; letter-spacing: 0.3px; }
+.comment-text { display: block; margin-top: 1px; }
+#comments input,
+#comments textarea {
+  background: #fffaeb;
+  border: 1px solid rgba(75, 45, 20, 0.45);
+  color: rgba(60, 35, 10, 0.92);
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+  outline: none;
+  border-radius: 0;
+}
+#comments input::placeholder,
+#comments textarea::placeholder { color: rgba(75, 45, 20, 0.45); }
+#comments input:focus,
+#comments textarea:focus { background: #fffefa; }
+#comments-submit {
+  background: rgba(75, 45, 20, 0.85);
+  color: #fbf3da;
+  border: 1px solid rgba(75, 45, 20, 0.85);
+  padding: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  border-radius: 0;
+}
+#comments-submit:hover { background: rgba(60, 35, 10, 1); }
+
 #map {
   display: block;
   width: 100vw;
@@ -23,7 +114,9 @@ html, body {
   border: 1px solid #333;
   padding: 12px;
   width: 260px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;

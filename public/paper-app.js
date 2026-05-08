@@ -19,7 +19,7 @@ const GRID_H = ROWS * BASE_CELL;
 const TIER_BOROUGH = 2.0;
 const TIER_BLOCKS = 5.0;
 const MIN_SCALE = 0.3;
-const MAX_SCALE = 20;
+const MAX_SCALE = 25;
 
 const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, monospace';
 const FONT_SIZE = 10;
@@ -40,7 +40,7 @@ const POSTIT_COLORS = [
 ];
 const POSTIT_PAD = 3;                             // inner padding (text -> edge)
 const POSTIT_MAX_INNER = 120;                     // max post-it inner width (screen px)
-const POSTIT_FADE_START = 1.5;                    // newest post-it snaps in at this scale
+const POSTIT_FADE_START = 10;                     // post-it snaps in at this scale (matches ASCII v=78)
 const POSTIT_STAGGER = 0.25;                      // each subsequent (older) post-it appears this many zoom units later
 const POSTIT_MAX_ROT = 5 * Math.PI / 180;         // ±5° random tilt per dot
 const POSTIT_INK = "rgba(40,40,40,0.95)";         // dark pencil/ink color on paper
@@ -82,11 +82,10 @@ let currentTier = "CITY";
 const stories = [];
 const storiesById = new Map();
 
-// Stories that land within STACK_THRESHOLD world units of each other are
-// grouped into a "cluster" — only one post-it is visible at a time per
-// cluster, with an arrow at the bottom-right to cycle through the rest
-// (newest → older). Rebuilt whenever a new story arrives.
-const STACK_THRESHOLD = 10;
+// Each click gets its own dot — only stories at the EXACT same world
+// point cluster (covers duplicate test data). Rebuilt whenever a new
+// story arrives.
+const STACK_THRESHOLD = 0.5;
 let clusters = [];
 
 function buildClusters() {
@@ -158,20 +157,23 @@ function resize() {
 let _zoomFloor = MIN_SCALE;
 
 // Default zoom is 1.23x of the natural fit-to-viewport scale, so the map
-// loads zoomed-in instead of fitting the whole grid. _zoomFloor is set to
-// the same value so the user can't zoom out below this default.
-const DEFAULT_ZOOM = 1.23;
+// Default zoom + centering match the ASCII version: load at s=4.5 with
+// Manhattan anchored to the upper-right of the viewport so the intro
+// panel in the upper-left has clear room and Brooklyn / Queens flow
+// downward into view. _zoomFloor relaxes to the fit-the-whole-grid
+// scale so users can still zoom out for the overview.
+const DEFAULT_ZOOM = 4.5;
 
 function fitToViewport() {
   const W = window.innerWidth;
   const H = window.innerHeight;
   const pad = 40;
   const fit = Math.min((W - pad * 2) / GRID_W, (H - pad * 2) / GRID_H);
-  const s = fit * DEFAULT_ZOOM;
-  _zoomFloor = s;
-  view.scale = s;
-  view.tx = (W - GRID_W * s) / 2;
-  view.ty = (H - GRID_H * s) / 2;
+  _zoomFloor = fit;
+  view.scale = DEFAULT_ZOOM;
+  const [manhattanWX, manhattanWY] = lonLatToWorld([-73.965, 40.789]);
+  view.tx = W * 0.58 - manhattanWX * DEFAULT_ZOOM;
+  view.ty = H * 0.18 - manhattanWY * DEFAULT_ZOOM;
   updateTier();
 }
 
@@ -705,6 +707,9 @@ function render() {
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
   ctx.fillText(`${currentTier}  ·  ${s.toFixed(2)}x  ·  ${stories.length} stories`, 12, H - 14);
+
+  // Keep the comments panel glued to its post-it as the user pans / zooms.
+  if (typeof syncCommentsPosition === "function") syncCommentsPosition();
 }
 
 // Photo thumbnail size (screen px).
@@ -783,6 +788,10 @@ function renderStories() {
   const s = view.scale;
   hasPhotos = false;
   clusterArrowHits.length = 0;
+  // Clear last-frame box rects; only clusters whose post-it actually
+  // renders this frame will get a fresh one set below. Used by
+  // syncCommentsPosition() to track the panel against its post-it.
+  for (const c of clusters) c._boxRect = null;
 
   ctx.font = FONT;
   ctx.textBaseline = "top";
@@ -806,9 +815,32 @@ function renderStories() {
   const _t = clamp((s - POSTIT_FADE_START) / (MAX_SCALE - POSTIT_FADE_START), 0, 1);
   const innerMax = LINE_HEIGHT + _t * (POSTIT_MAX_INNER - LINE_HEIGHT);
 
+  // ---- Pass 1: pins (under the post-its + above the map) ----
   for (let ci = 0; ci < clusters.length; ci++) {
     const cluster = clusters[ci];
-    // Apply in-memory drag offset (resets to 0 on refresh).
+    const effectiveWx = cluster.wx + (cluster.dx || 0);
+    const effectiveWy = cluster.wy + (cluster.dy || 0);
+    if (effectiveWx < vbMinX || effectiveWx > vbMaxX) continue;
+    if (effectiveWy < vbMinY || effectiveWy > vbMaxY) continue;
+
+    const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
+    if (!story) continue;
+
+    const cx = view.tx + effectiveWx * s;
+    const cy = view.ty + effectiveWy * s;
+    const seed = storySeed(story);
+    const pinPaletteIdx = Math.floor(seed * PIN_PALETTE.length);
+    if (pinAlpha > 0) {
+      drawPin(cx, cy, pinScreenR, PIN_PALETTE[pinPaletteIdx], pinAlpha);
+    }
+  }
+
+  // ---- Pass 2: post-its (always above pins so overlapping pins from other
+  // clusters never bleed onto a card) ----
+  if (!postitVisible) return;
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cluster = clusters[ci];
     const effectiveWx = cluster.wx + (cluster.dx || 0);
     const effectiveWy = cluster.wy + (cluster.dy || 0);
     if (effectiveWx < vbMinX || effectiveWx > vbMaxX) continue;
@@ -821,18 +853,10 @@ function renderStories() {
     const cy = view.ty + effectiveWy * s;
 
     const seed = storySeed(story);
-    const pinPaletteIdx = Math.floor(seed * PIN_PALETTE.length);
     const tilt = (seed - 0.5) * 2 * POSTIT_MAX_ROT;
     const colorIdx = Math.floor(((seed * 7.31) % 1) * POSTIT_COLORS.length);
     const postitColor = POSTIT_COLORS[colorIdx];
     const topPinColor = PIN_PALETTE[Math.floor(((seed * 13.7) % 1) * PIN_PALETTE.length)];
-
-    // Pin (zoom-out marker). Fades out as zoom crosses POSTIT_FADE_START.
-    if (pinAlpha > 0) {
-      drawPin(cx, cy, pinScreenR, PIN_PALETTE[pinPaletteIdx], pinAlpha);
-    }
-
-    if (!postitVisible) continue;
 
     ensureStoryPrepared(story);
     story.boxW = innerMax;
@@ -971,6 +995,16 @@ function renderStories() {
     drawPin(0, pinTopY, topPinR, topPinColor, 1);
 
     ctx.restore();
+
+    // Stash the unrotated AABB on the cluster so the comments panel can
+    // anchor below this post-it. Tilt is small (~5°) so this matches the
+    // visible bottom edge closely.
+    cluster._boxRect = {
+      x: cx - postitFullW / 2,
+      y: cy - postitFullH / 2,
+      w: postitFullW,
+      h: postitFullH,
+    };
   }
 }
 
@@ -1490,6 +1524,22 @@ async function handleCanvasClick(sx, sy) {
   }
   // Arrow buttons on stacked post-its take priority.
   if (handleArrowClick(sx, sy)) return;
+  // Click landed on a post-it → open the comments panel for it.
+  const hitCluster = _hitTestPostit(sx, sy);
+  if (hitCluster) {
+    openComments(hitCluster, sx, sy);
+    return;
+  }
+  // If the comments panel is open, an outside-click should ONLY close it.
+  if (!commentsEl.hidden) {
+    closeComments();
+    return;
+  }
+  // Block clicks on the corkboard intro panel — fixed-position screen rect
+  // at (CORK_SX, CORK_SY) with size (CORK_SW × CORK_SH); nothing to do
+  // when the user taps it.
+  if (sx >= CORK_SX && sx <= CORK_SX + CORK_SW &&
+      sy >= CORK_SY && sy <= CORK_SY + CORK_SH) return;
   // Otherwise place a new pin at the exact click coords — only on land.
   const w = screenToWorld(sx, sy);
   if (!isOnLand(w.x, w.y)) return;
@@ -1737,14 +1787,21 @@ function openWriter(wx, wy, nearX, nearY) {
   authoringWy = wy;
   writerLoc.textContent = `(${wx.toFixed(0)}, ${wy.toFixed(0)})`;
   writerEl.hidden = false;
-  // Position near the click, kept on screen.
-  const rect = writerEl.getBoundingClientRect();
-  const w = rect.width || 260;
-  const h = rect.height || 220;
-  const x = Math.min(window.innerWidth - w - 12, Math.max(12, nearX + 16));
-  const y = Math.min(window.innerHeight - h - 12, Math.max(12, nearY + 16));
-  writerEl.style.left = x + "px";
-  writerEl.style.top = y + "px";
+  // First-pass placement near the click; clamped after layout below so the
+  // panel + camera section can never push past the viewport edges.
+  writerEl.style.left = (nearX + 16) + "px";
+  writerEl.style.top  = (nearY + 16) + "px";
+  requestAnimationFrame(() => {
+    const margin = 12;
+    const rect = writerEl.getBoundingClientRect();
+    let x = nearX + 16, y = nearY + 16;
+    if (x + rect.width  > window.innerWidth  - margin) x = window.innerWidth  - rect.width  - margin;
+    if (y + rect.height > window.innerHeight - margin) y = window.innerHeight - rect.height - margin;
+    if (x < margin) x = margin;
+    if (y < margin) y = margin;
+    writerEl.style.left = x + "px";
+    writerEl.style.top  = y + "px";
+  });
   writerName.focus();
   startCamera();
   broadcastDraft();
@@ -1809,11 +1866,197 @@ writerSubmit.addEventListener("click", async () => {
   const data = await res.json();
   if (data.success) {
     socket.emit("draft:cancel");
+    const postedWx = authoringWx;
+    const postedWy = authoringWy;
     closeWriter(false);
+    // Slam to MAX_SCALE so the new post-it is at full natural size — photo
+    // visible, all text revealed. No page refresh; the next visitor sees a
+    // real story zoomed in alongside the welcome panel.
+    if (postedWx != null && postedWy != null) {
+      view.scale = MAX_SCALE;
+      view.tx = window.innerWidth  / 2 - postedWx * MAX_SCALE;
+      view.ty = window.innerHeight / 2 - postedWy * MAX_SCALE;
+      updateTier();
+      render();
+    }
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
     setTimeout(() => (writerSubmit.textContent = "leave it here"), 3000);
+  }
+});
+
+// ---- comments ----
+const commentsEl     = document.getElementById("comments");
+const commentsSpot   = document.getElementById("comments-spot");
+const commentsList   = document.getElementById("comments-list");
+const commentsName   = document.getElementById("comments-name");
+const commentsText   = document.getElementById("comments-text");
+const commentsClose  = document.getElementById("comments-close");
+const commentsSubmit = document.getElementById("comments-submit");
+let _commentsStoryId = null;
+
+function _renderComments(story) {
+  commentsList.innerHTML = "";
+  const list = (story && story.comments) || [];
+  for (const c of list) {
+    const item = document.createElement("div");
+    item.className = "comment-item";
+    const author = document.createElement("span");
+    author.className = "comment-author";
+    author.textContent = c.name;
+    const txt = document.createElement("span");
+    txt.className = "comment-text";
+    txt.textContent = c.text;
+    item.appendChild(author);
+    item.appendChild(txt);
+    commentsList.appendChild(item);
+  }
+}
+
+// De-duped append so the optimistic local push and the socket broadcast
+// don't both add the same comment.
+function _addCommentDedup(story, comment) {
+  if (!story.comments) story.comments = [];
+  for (const c of story.comments) {
+    if (c.timestamp === comment.timestamp && c.text === comment.text && c.name === comment.name) {
+      return false;
+    }
+  }
+  story.comments.push(comment);
+  return true;
+}
+
+function openComments(cluster, nearX, nearY) {
+  const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
+  if (!story || !story._id) return;
+  _commentsStoryId = story._id;
+  commentsSpot.textContent = `[ ${(story.spot || "").slice(0, 30) || "—"} ]`;
+  _renderComments(story);
+  commentsEl.hidden = false;
+
+  const cardR = cluster._boxRect;
+  const PANEL_MIN_W = 220;
+  const PANEL_MAX_W = 360;
+  let panelW, x, y;
+  if (cardR) {
+    panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, cardR.w));
+    x = cardR.x;
+    y = cardR.y + cardR.h;
+  } else {
+    panelW = PANEL_MIN_W;
+    x = nearX + 16;
+    y = nearY + 16;
+  }
+  commentsEl.style.width = panelW + "px";
+  commentsEl.style.left  = x + "px";
+  commentsEl.style.top   = y + "px";
+
+  requestAnimationFrame(() => {
+    const margin = 12;
+    const rect = commentsEl.getBoundingClientRect();
+    let nx = parseFloat(commentsEl.style.left);
+    let ny = parseFloat(commentsEl.style.top);
+    if (nx + rect.width  > window.innerWidth  - margin) nx = window.innerWidth  - rect.width  - margin;
+    if (nx < margin) nx = margin;
+    if (ny + rect.height > window.innerHeight - margin) {
+      if (cardR) {
+        const above = cardR.y - rect.height;
+        ny = above >= margin ? above : window.innerHeight - rect.height - margin;
+      } else {
+        ny = window.innerHeight - rect.height - margin;
+      }
+    }
+    if (ny < margin) ny = margin;
+    commentsEl.style.left = nx + "px";
+    commentsEl.style.top  = ny + "px";
+    commentsName.focus();
+  });
+}
+
+function closeComments() {
+  commentsEl.hidden = true;
+  _commentsStoryId = null;
+  commentsName.value = "";
+  commentsText.value = "";
+}
+
+// Track the open panel to its post-it on every render frame. Re-binds when
+// a cluster is cycled (so the panel always shows the active story's
+// comments). Closes the panel if the post-it is no longer rendered.
+function syncCommentsPosition() {
+  if (commentsEl.hidden || !_commentsStoryId) return;
+  let cluster = null;
+  for (const c of clusters) {
+    if (c.stories.some(s => s._id === _commentsStoryId)) { cluster = c; break; }
+  }
+  if (!cluster || !cluster._boxRect) {
+    closeComments();
+    return;
+  }
+  const activeStory = cluster.stories[cluster.activeIdx] || cluster.stories[0];
+  if (activeStory && activeStory._id && activeStory._id !== _commentsStoryId) {
+    _commentsStoryId = activeStory._id;
+    commentsSpot.textContent = `[ ${(activeStory.spot || "").slice(0, 30) || "—"} ]`;
+    _renderComments(activeStory);
+    commentsName.value = "";
+    commentsText.value = "";
+  }
+  const cardR = cluster._boxRect;
+  const PANEL_MIN_W = 220;
+  const PANEL_MAX_W = 360;
+  const margin = 12;
+  const panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, cardR.w));
+  let x = cardR.x;
+  let y = cardR.y + cardR.h;
+  if (x + panelW > window.innerWidth - margin) x = window.innerWidth - panelW - margin;
+  if (x < margin) x = margin;
+  const panelH = commentsEl.getBoundingClientRect().height;
+  if (y + panelH > window.innerHeight - margin) {
+    const above = cardR.y - panelH;
+    y = above >= margin ? above : window.innerHeight - panelH - margin;
+  }
+  if (y < margin) y = margin;
+  commentsEl.style.width = panelW + "px";
+  commentsEl.style.left  = x + "px";
+  commentsEl.style.top   = y + "px";
+}
+
+commentsClose.addEventListener("click", closeComments);
+
+commentsSubmit.addEventListener("click", async () => {
+  if (!_commentsStoryId) return;
+  const name = commentsName.value.trim();
+  const text = commentsText.value.trim();
+  if (!name || !text) {
+    commentsSubmit.textContent = "fill in both";
+    setTimeout(() => (commentsSubmit.textContent = "post"), 1500);
+    return;
+  }
+  commentsSubmit.disabled = true;
+  try {
+    const res = await fetch(`/story/${_commentsStoryId}/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, text }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      const story = storiesById.get(_commentsStoryId);
+      if (story) {
+        _addCommentDedup(story, data.comment);
+        _renderComments(story);
+      }
+      commentsName.value = "";
+      commentsText.value = "";
+    } else {
+      commentsSubmit.textContent = data.message || "couldn't post";
+      setTimeout(() => (commentsSubmit.textContent = "post"), 2500);
+    }
+  } catch (err) {
+    console.warn("comment post failed:", err);
+  } finally {
+    commentsSubmit.disabled = false;
   }
 });
 
@@ -1828,6 +2071,12 @@ for (const name of Object.keys(mapLayers)) loadMapLayer(name);
 
 // ---- socket: story commits + cursor presence ----
 socket.on("connect", () => console.log("socket connected:", socket.id));
+socket.on("comment:add", ({ storyId, comment }) => {
+  const story = storiesById.get(storyId);
+  if (!story) return;
+  const added = _addCommentDedup(story, comment);
+  if (added && _commentsStoryId === storyId) _renderComments(story);
+});
 socket.on("story:commit", (s) => {
   ingestStory(s);
   render();
