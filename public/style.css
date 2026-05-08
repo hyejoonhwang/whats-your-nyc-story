@@ -113,8 +113,7 @@ html, body {
   position: fixed;
   z-index: 10;
   background: #f4f4f4;            /* visual difference from card's white body */
-  border: 1px solid #000;
-  border-top-style: dashed;       /* section divider — "comments below" */
+  border: 1px dashed #000;        /* all-dashed frame distinguishes the panel from the solid card */
   padding: 8px 10px 10px;
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
