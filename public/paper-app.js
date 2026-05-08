@@ -698,8 +698,9 @@ function render() {
   renderDrafts();
   renderPeerCursors();
 
-  // Corkboard intro panel — drawn last so it overlays everything except HUD.
-  renderCorkboard();
+  // Intro is a DOM <aside id="intro"> overlay (paper-app.html) — not drawn
+  // here. Renders above the canvas via z-index, and absorbs clicks so they
+  // don't fall through to the map.
 
   // HUD.
   ctx.fillStyle = "rgba(75, 45, 20, 0.7)";
@@ -1537,11 +1538,6 @@ async function handleCanvasClick(sx, sy) {
     closeComments();
     return;
   }
-  // Block clicks on the corkboard intro panel — fixed-position screen rect
-  // at (CORK_SX, CORK_SY) with size (CORK_SW × CORK_SH); nothing to do
-  // when the user taps it.
-  if (sx >= CORK_SX && sx <= CORK_SX + CORK_SW &&
-      sy >= CORK_SY && sy <= CORK_SY + CORK_SH) return;
   // Otherwise place a new pin at the exact click coords — only on land.
   const w = screenToWorld(sx, sy);
   if (!isOnLand(w.x, w.y)) return;
@@ -1881,6 +1877,14 @@ writerSubmit.addEventListener("click", async () => {
       updateTier();
       render();
     }
+    // Re-open the intro panel — leaves the just-posted post-it zoomed in
+    // on the map (eye candy for the next visitor) while the welcome
+    // resurfaces alongside it.
+    const introEl = document.getElementById("intro");
+    if (introEl) {
+      introEl.classList.add("open");
+      introEl.classList.remove("closed");
+    }
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
@@ -2061,6 +2065,25 @@ commentsSubmit.addEventListener("click", async () => {
     commentsSubmit.disabled = false;
   }
 });
+
+// ---- intro panel ----
+// DOM-based; CSS handles desktop / mobile-modal layouts. Always starts
+// expanded on every page load — first-time visitors and returning ones see
+// the welcome at the top of every session.
+(() => {
+  const introEl = document.getElementById("intro");
+  const introOk = document.getElementById("intro-ok");
+  const introClose = document.getElementById("intro-close");
+  const introHandle = document.getElementById("intro-handle");
+  if (!introEl) return;
+  introEl.classList.add("open");
+  introEl.classList.remove("closed");
+  function open() { introEl.classList.add("open"); introEl.classList.remove("closed"); }
+  function close() { introEl.classList.remove("open"); introEl.classList.add("closed"); }
+  introOk.addEventListener("click", close);
+  introClose.addEventListener("click", close);
+  introHandle.addEventListener("click", open);
+})();
 
 // ---- init ----
 window.addEventListener("resize", resize);

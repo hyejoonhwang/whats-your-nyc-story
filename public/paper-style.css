@@ -9,6 +9,102 @@ html, body {
   color: #e8e8e8;
 }
 
+/* Intro panel — DOM (not canvas) so clicks don't fall through to the map.
+   Paper-themed: cream cardstock + sepia ink + dashed sepia border. Two
+   states: .open shows the full panel; .closed shows just a tiny corner
+   handle. Mobile renders .open as a centered modal. */
+#intro {
+  position: fixed;
+  z-index: 50;
+  font-family: Georgia, "Times New Roman", serif;
+  color: rgba(60, 35, 10, 0.92);
+  font-size: 13px;
+  line-height: 1.5;
+}
+#intro.open  { top: 20px; left: 20px; }
+#intro.closed { top: 20px; left: 20px; }
+#intro.open #intro-handle { display: none; }
+#intro.closed #intro-content,
+#intro.closed #intro-close { display: none; }
+
+#intro-content {
+  background: #fef8df;
+  border: 1px dashed rgba(75, 45, 20, 0.55);
+  padding: 14px 18px 14px;
+  width: 280px;
+  position: relative;
+  box-shadow: 0 6px 18px rgba(60, 35, 10, 0.18);
+}
+
+#intro-title {
+  font-style: italic;
+  font-weight: bold;
+  font-size: 18px;
+  margin-bottom: 10px;
+  color: rgba(60, 35, 10, 0.92);
+  border-bottom: 1px dashed rgba(75, 45, 20, 0.55);
+  padding-bottom: 8px;
+}
+
+.intro-section { margin-bottom: 10px; }
+.intro-section p { margin-bottom: 4px; }
+.intro-section .intro-h {
+  font-weight: bold;
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+  color: rgba(60, 35, 10, 0.92);
+}
+.intro-section ol { padding-left: 18px; margin-top: 4px; }
+.intro-section li { margin-bottom: 2px; }
+
+#intro-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  color: rgba(60, 35, 10, 0.92);
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 6px;
+  line-height: 18px;
+  border-radius: 0;
+  font-family: Georgia, serif;
+}
+#intro-close:hover { background: rgba(75, 45, 20, 0.85); color: #fef8df; }
+
+#intro-ok,
+#intro-handle {
+  background: #fef8df;
+  color: rgba(60, 35, 10, 0.92);
+  border: 1px solid rgba(75, 45, 20, 0.55);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  border-radius: 0;
+  margin-top: 6px;
+  font-family: Georgia, serif;
+  box-shadow: 0 3px 8px rgba(60, 35, 10, 0.16);
+}
+#intro-ok:hover,
+#intro-handle:hover { background: rgba(75, 45, 20, 0.85); color: #fef8df; }
+
+@media (max-width: 768px) {
+  #intro.open {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  #intro.open #intro-content {
+    width: calc(100vw - 32px);
+    max-width: 320px;
+    box-shadow: 0 0 0 9999px rgba(40, 25, 5, 0.45);
+  }
+}
+
 /* Comments panel — paper-themed (cream + sepia ink). Anchored flush to a
    post-it's bottom edge by JS so it reads as an extension of the card. */
 #comments {
