@@ -734,10 +734,11 @@ function placeChar(grid, r, c, ch) {
   return 1;
 }
 
-// Pick the smallest square card whose body region fits the story's text
-// plus the (uniform) photo. Square means boxCols × cellW = boxRows × cellH;
-// since cellH = 2 × cellW, that's boxRows = boxCols/2 and the algebra below
-// works in even values of innerCols. Cached per story.
+// Pick the natural-max cell footprint for a story — sized to fit *exactly*
+// the text it contains plus the photo, with a small slack for whitespace.
+// innerCols is bucketed by text length so long stories don't grow absurdly
+// tall; bodyRows is the exact count needed to hold the content (no empty
+// rows at the bottom). Cached per story.
 function computeBoxSize(story) {
   if (story._boxCells) return story._boxCells;
 
@@ -760,27 +761,30 @@ function computeBoxSize(story) {
   const slack     = Math.ceil(bodyW * 0.10) + 4;
   const need      = bodyW + slack + photoArea;
 
-  // Square constraint:
-  //   boxCols  = innerCols + 2 (must be even for clean halving)
-  //   boxRows  = boxCols / 2 = innerCols/2 + 1
-  //   innerRows = boxRows - 2 = innerCols/2 - 1
-  //   bodyRows  = innerRows - 2 = innerCols/2 - 3   (header + rule)
-  //   bodyCells = bodyRows × innerCols
-  //
-  // Find the smallest even innerCols whose bodyCells ≥ need.
-  let innerCols = 12;
-  while ((innerCols / 2 - 3) * innerCols < need && innerCols < 60) innerCols += 2;
+  // Pick a target body width by text length so long stories get wider cards
+  // (and stay roughly readable) while short ones stay tight.
+  let innerCols;
+  if      (bodyW < 30)  innerCols = 12;
+  else if (bodyW < 80)  innerCols = 16;
+  else if (bodyW < 160) innerCols = 20;
+  else                  innerCols = 24;
 
-  // Always at least wide enough for the header.
+  // Always at least wide enough to hold the header without truncation.
   if (headerW + 2 > innerCols) innerCols = headerW + 2;
-  if (innerCols % 2 === 1)     innerCols += 1;
-
-  // If a photo is present, must be wide enough to hold it with a bit of
-  // breathing room.
+  // Always wide enough to hold the (uniform) photo with breathing room.
   if (hasPhoto && innerCols < PHOTO_CELLS_W + 4) innerCols = PHOTO_CELLS_W + 4;
-
+  // Even-snap so the right border lands cleanly.
+  if (innerCols % 2 === 1) innerCols += 1;
   innerCols = Math.min(innerCols, 60);
-  const innerRows = innerCols / 2 - 1;
+
+  // Body rows = exactly enough to hold the text + photo. Past this point any
+  // additional rows would just be empty.
+  let bodyRows = Math.ceil(need / innerCols);
+  if (hasPhoto && bodyRows < PHOTO_CELLS_H + 1) bodyRows = PHOTO_CELLS_H + 1;
+  bodyRows = Math.max(1, bodyRows);
+
+  // header (1) + rule (1) + body
+  const innerRows = 2 + bodyRows;
 
   story._boxCells = { innerCols, innerRows };
   return story._boxCells;
