@@ -170,10 +170,21 @@ function fitToViewport() {
   const pad = 40;
   const fit = Math.min((W - pad * 2) / GRID_W, (H - pad * 2) / GRID_H);
   _zoomFloor = fit;
-  view.scale = DEFAULT_ZOOM;
+  // Mobile (portrait phones) opens at a lighter zoom with Manhattan centered
+  // horizontally near the top — the map flows from Manhattan down through
+  // Brooklyn naturally on a tall screen. Desktop biases upper-right to
+  // clear room for the intro panel.
+  const isMobile = W < 768;
+  const scale = isMobile ? 3.0 : DEFAULT_ZOOM;
+  view.scale = scale;
   const [manhattanWX, manhattanWY] = lonLatToWorld([-73.965, 40.789]);
-  view.tx = W * 0.58 - manhattanWX * DEFAULT_ZOOM;
-  view.ty = H * 0.18 - manhattanWY * DEFAULT_ZOOM;
+  if (isMobile) {
+    view.tx = W * 0.5  - manhattanWX * scale;
+    view.ty = H * 0.2  - manhattanWY * scale;
+  } else {
+    view.tx = W * 0.58 - manhattanWX * scale;
+    view.ty = H * 0.18 - manhattanWY * scale;
+  }
   updateTier();
 }
 

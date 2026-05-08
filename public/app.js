@@ -193,14 +193,21 @@ function fitToViewport() {
   const pad = 40;
   const fit = Math.min((W - pad * 2) / GRID_W, (H - pad * 2) / GRID_H);
   _zoomFloor = fit;
-  view.scale = DEFAULT_ZOOM;
-  // Open with Manhattan parked in the upper-right area of the screen so the
-  // intro panel in the upper-left has clear room and Brooklyn/Queens flow
-  // downward into view. (Centering the whole world grid puts the geometric
-  // middle near central Brooklyn — too far south for a "welcome" composition.)
+  // Mobile (narrow viewports) gets a tighter zoom and centers Manhattan
+  // horizontally near the top so the map runs from Manhattan at the top
+  // to Brooklyn at the bottom of a portrait screen. Desktop biases
+  // Manhattan to the upper-right to clear room for the intro panel.
+  const isMobile = W < 768;
+  const scale = isMobile ? 3.0 : DEFAULT_ZOOM;
+  view.scale = scale;
   const [manhattanWX, manhattanWY] = lonLatToWorld([-73.965, 40.789]);
-  view.tx = W * 0.58 - manhattanWX * DEFAULT_ZOOM;
-  view.ty = H * 0.18 - manhattanWY * DEFAULT_ZOOM;
+  if (isMobile) {
+    view.tx = W * 0.5  - manhattanWX * scale;
+    view.ty = H * 0.2  - manhattanWY * scale;
+  } else {
+    view.tx = W * 0.58 - manhattanWX * scale;
+    view.ty = H * 0.18 - manhattanWY * scale;
+  }
   updateTier();
 }
 
