@@ -51,8 +51,8 @@ const POSTIT_TOP_PIN_R_MAX = 5;                   // top-of-post-it pin: max scr
 // glossy pin clustered around its dot — number of pins matches story count.
 // Pins cross-fade with post-its over the same range (pin out / post-it in).
 const PIN_RADIUS_WORLD = 1.8;                     // pin radius in world units
-const PIN_RADIUS_MIN_SCREEN = 2.5;                // never below this on screen
-const PIN_RADIUS_MAX_SCREEN = 7;                  // never above this on screen
+const PIN_RADIUS_MIN_SCREEN = 2;                  // never below this on screen
+const PIN_RADIUS_MAX_SCREEN = 5;                  // matches the top-pin size on the smallest post-it
 const PIN_CLUSTER_RADIUS_WORLD = BASE_CELL * 0.5; // pins fan out within the dot footprint
 const PIN_FADE_START = POSTIT_FADE_START;                       // pins start fading exactly when the first post-it appears
 const PIN_FADE_END = POSTIT_FADE_START + 0.3;                   // pins gone shortly after the first post-it pops in
