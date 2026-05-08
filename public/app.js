@@ -790,7 +790,7 @@ function computeBoxSize(story) {
 // with size: tiny boxes show only the name; once there's room, the spot
 // joins it in the header; large enough boxes also gain a rule + body with
 // the story flowing letter-by-letter around the photo silhouette.
-function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
+function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc, cellW) {
   const boxCols = innerCols + 2;
   const boxRows = innerRows + 2;
   const grid = new Array(boxRows);
@@ -1025,7 +1025,7 @@ function renderStories() {
     }
 
     const { grid, arrowSpan } = buildStoryGrid(
-      story, cluster, innerCols, innerRows, photoOcc);
+      story, cluster, innerCols, innerRows, photoOcc, cellW);
 
     // White knock-out so map lines underneath don't bleed through.
     ctx.fillStyle = PAPER;
