@@ -1652,11 +1652,22 @@ writerSubmit.addEventListener("click", async () => {
   const data = await res.json();
   if (data.success) {
     socket.emit("draft:cancel");
+    // Capture the just-posted coords before closeWriter() nulls them out.
+    const postedWx = authoringWx;
+    const postedWy = authoringWy;
     closeWriter(false);
-    // Hard refresh after a successful post so the user lands back on the
-    // intro screen, sees the welcome panel again, and the new pin is on
-    // the map from the freshly-loaded /stories list.
-    location.reload();
+    // Pan + zoom to the new pin so the user can see their card materialize
+    // on the map, then refresh after 5 s so the welcome panel returns and
+    // /stories is freshly reloaded.
+    if (postedWx != null && postedWy != null) {
+      const FOCUS_SCALE = 20;   // well past BOX_FADE_START → card is readable
+      view.scale = FOCUS_SCALE;
+      view.tx = window.innerWidth  / 2 - postedWx * FOCUS_SCALE;
+      view.ty = window.innerHeight / 2 - postedWy * FOCUS_SCALE;
+      updateTier();
+      render();
+    }
+    setTimeout(() => location.reload(), 5000);
   } else {
     // Show server's reason briefly (e.g., moderation flagged it).
     writerSubmit.textContent = data.message || "couldn't post";
