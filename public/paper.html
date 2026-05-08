@@ -28,24 +28,7 @@
   <canvas id="map"></canvas>
   <aside id="intro" class="open">
     <button id="intro-close" type="button" aria-label="collapse">×</button>
-    <div id="intro-content">
-      <div id="intro-title">What's Your NYC Story?</div>
-      <div class="intro-section">
-        <p>everyone has their own version of nyc — on every corner, in every building.</p>
-        <p>we live in the same city, but is it really the same?</p>
-        <p>i'd love to know what nyc means to you, and what stories you hold.</p>
-      </div>
-      <div class="intro-section">
-        <p class="intro-h">how to leave a story</p>
-        <ol>
-          <li>zoom in and click where your story lives.</li>
-          <li>write your name, the place, and what happened.</li>
-          <li>take a selfie.</li>
-          <li>hit "leave it here."</li>
-        </ol>
-      </div>
-      <button id="intro-ok" type="button">ok, got it</button>
-    </div>
+    <canvas id="intro-canvas" width="180" height="410"></canvas>
     <button id="intro-handle" type="button">? what's your nyc story</button>
   </aside>
   <div id="comments" hidden>
@@ -90,6 +73,6 @@
   <a id="mode-toggle" href="/">[ try the ascii version → ]</a>
   <script src="/socket.io/socket.io.js"></script>
   <script src="grid.js?v=5"></script>
-  <script type="module" src="paper-app.js?v=7"></script>
+  <script type="module" src="paper-app.js?v=8"></script>
 </body>
 </html>

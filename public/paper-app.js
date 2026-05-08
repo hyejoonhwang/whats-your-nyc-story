@@ -684,6 +684,153 @@ function _drawCorkPaperFixed(sx, sy, sw, sh, tilt, color, lines) {
   ctx.restore();
 }
 
+// ============================================================================
+// Intro corkboard — same visual as renderCorkboard() but painted onto a
+// dedicated <canvas id="intro-canvas"> nested inside the DOM <aside id="intro">.
+// The DOM wrapper handles click-blocking, the collapse-to-corner state, and
+// the mobile centered-modal layout via CSS. The canvas just provides the
+// painted corkboard look.
+// ============================================================================
+function renderIntroCanvas() {
+  const introCanvas = document.getElementById("intro-canvas");
+  if (!introCanvas) return;
+  const sw = 180, sh = 410;
+  const dpr = window.devicePixelRatio || 1;
+  introCanvas.width = sw * dpr;
+  introCanvas.height = sh * dpr;
+  introCanvas.style.width  = sw + "px";
+  introCanvas.style.height = sh + "px";
+  const cx = introCanvas.getContext("2d");
+  cx.scale(dpr, dpr);
+
+  // Cork backboard with drop shadow
+  cx.save();
+  cx.shadowColor = "rgba(0,0,0,0.4)";
+  cx.shadowBlur = 6;
+  cx.shadowOffsetX = 2;
+  cx.shadowOffsetY = 4;
+  cx.fillStyle = "#a87146";
+  cx.fillRect(0, 0, sw, sh);
+  cx.shadowColor = "transparent";
+  cx.restore();
+
+  // Cork grain — share the main canvas's pattern (CanvasPattern objects work
+  // on any context, even though they were originally created on `ctx`).
+  ensureMapPaperPattern();
+  if (_mapPaperPattern) {
+    cx.save();
+    cx.fillStyle = _mapPaperPattern;
+    cx.globalAlpha = 0.55;
+    cx.fillRect(0, 0, sw, sh);
+    cx.restore();
+  }
+
+  // Dark wooden frame
+  cx.strokeStyle = "#3a2615";
+  cx.lineWidth = 2;
+  cx.strokeRect(1, 1, sw - 2, sh - 2);
+
+  // Three pinned papers (positions copied from the original renderCorkboard
+  // body, just dropping the CORK_SX/CORK_SY offset since the canvas origin
+  // is already the corkboard's top-left).
+  _drawIntroPaper(cx, 18, 12, 145, 50, -0.05, "#fef8df", [
+    { text: "What's Your", size: 13, weight: "bold",        fam: "Georgia, serif" },
+    { text: "NYC Story?",  size: 15, weight: "italic bold", fam: "Georgia, serif" },
+  ]);
+  _drawIntroPaper(cx, 12, 76, 155, 142, 0.035, "#f4ebd4", [
+    { text: "everyone has their",   size: 9 },
+    { text: "own version of nyc —", size: 9 },
+    { text: "on every corner,",     size: 9 },
+    { text: "in every building.",   size: 9 },
+    { text: "",                     size: 4 },
+    { text: "we live in the same",  size: 9 },
+    { text: "city, but is it",      size: 9 },
+    { text: "really the same?",     size: 9 },
+    { text: "",                     size: 4 },
+    { text: "i'd love to know",     size: 9 },
+    { text: "what nyc means to",    size: 9 },
+    { text: "you, and what",        size: 9 },
+    { text: "stories you hold.",    size: 9 },
+  ]);
+  _drawIntroPaper(cx, 14, 230, 152, 168, -0.03, "#ffeac9", [
+    { text: "how to leave a",       size: 9, weight: "bold" },
+    { text: "story:",               size: 9, weight: "bold" },
+    { text: "",                     size: 4 },
+    { text: "1. zoom in and click", size: 9 },
+    { text: "   the spot where",    size: 9 },
+    { text: "   your story lives.", size: 9 },
+    { text: "",                     size: 3 },
+    { text: "2. write your name,",  size: 9 },
+    { text: "   the place, and",    size: 9 },
+    { text: "   what happened.",    size: 9 },
+    { text: "",                     size: 3 },
+    { text: "3. take a quick",      size: 9 },
+    { text: "   selfie.",           size: 9 },
+    { text: "",                     size: 3 },
+    { text: "4. hit 'leave your",   size: 9 },
+    { text: "   story here.'",      size: 9 },
+  ]);
+}
+
+function _drawIntroPaper(cx, sx, sy, sw, sh, tilt, color, lines) {
+  cx.save();
+  cx.translate(sx + sw / 2, sy + sh / 2);
+  cx.rotate(tilt);
+
+  // Paper with drop shadow
+  cx.shadowColor = "rgba(0,0,0,0.4)";
+  cx.shadowBlur = 4;
+  cx.shadowOffsetX = 1;
+  cx.shadowOffsetY = 3;
+  cx.fillStyle = color;
+  cx.fillRect(-sw / 2, -sh / 2, sw, sh);
+  cx.shadowColor = "transparent";
+
+  // Small pin at top center (inlined — drawPin() uses the global ctx).
+  const pinR = 4;
+  const pinColorIdx = (Math.round(sx + sy)) % PIN_PALETTE.length;
+  _drawPinAtCx(cx, 0, -sh / 2 + pinR + 2, pinR, PIN_PALETTE[pinColorIdx], 1);
+
+  // Text lines (vertically centered, fixed font sizes)
+  cx.fillStyle = "rgba(50, 30, 10, 0.92)";
+  cx.textAlign = "center";
+  cx.textBaseline = "middle";
+
+  let totalH = 0;
+  for (const ln of lines) totalH += ln.size * 1.25;
+  let y = -totalH / 2;
+  for (const ln of lines) {
+    const lineH = ln.size * 1.25;
+    if (ln.text) {
+      const weight = ln.weight ? ln.weight + " " : "";
+      const fam = ln.fam || "ui-monospace, monospace";
+      cx.font = `${weight}${ln.size}px ${fam}`;
+      cx.fillText(ln.text, 0, y + lineH / 2);
+    }
+    y += lineH;
+  }
+  cx.restore();
+}
+
+function _drawPinAtCx(cx, sx, sy, sr, color, alpha) {
+  cx.save();
+  cx.globalAlpha = alpha;
+  const offset = sr * 0.36;
+  const grad = cx.createRadialGradient(
+    sx - offset, sy - offset, 0,
+    sx, sy, sr * 1.05,
+  );
+  grad.addColorStop(0.00, "rgba(255,255,255,0.95)");
+  grad.addColorStop(0.22, color.light);
+  grad.addColorStop(0.55, color.mid);
+  grad.addColorStop(1.00, color.dark);
+  cx.fillStyle = grad;
+  cx.beginPath();
+  cx.arc(sx, sy, sr, 0, Math.PI * 2);
+  cx.fill();
+  cx.restore();
+}
+
 // ---- render ----
 function render() {
   const W = window.innerWidth;
@@ -2119,6 +2266,7 @@ window.addEventListener("resize", resize);
 resize();
 fitToViewport();
 render();
+renderIntroCanvas();   // paint the corkboard once into its own canvas
 loadStories();
 // Kick off background map layer loads in parallel.
 for (const name of Object.keys(mapLayers)) loadMapLayer(name);
