@@ -829,7 +829,9 @@ function renderStories() {
     const cx = view.tx + effectiveWx * s;
     const cy = view.ty + effectiveWy * s;
     const seed = storySeed(story);
-    const pinPaletteIdx = Math.floor(seed * PIN_PALETTE.length);
+    // Match the formula used for the top-pin on the rendered post-it (pass 2)
+    // so the same story's pin keeps the same color across zoom levels.
+    const pinPaletteIdx = Math.floor(((seed * 13.7) % 1) * PIN_PALETTE.length);
     if (pinAlpha > 0) {
       drawPin(cx, cy, pinScreenR, PIN_PALETTE[pinPaletteIdx], pinAlpha);
     }
