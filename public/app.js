@@ -547,6 +547,11 @@ function render() {
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
   ctx.fillText(`${currentTier}  ·  ${s.toFixed(2)}x  ·  ${stories.length} stories`, 12, H - 14);
+
+  // If a comments panel is open, keep it glued to its story card as the
+  // user pans / zooms. Defined further below; safe-guard with typeof in
+  // case render() fires before the comments setup ran.
+  if (typeof syncCommentsPosition === "function") syncCommentsPosition();
 }
 
 // ============================================================================
@@ -814,6 +819,9 @@ function renderStories() {
   const s = view.scale;
   hasPhotos = false;
   clusterArrowHits.length = 0;
+  // Clear last-frame box rects; only clusters whose card actually renders
+  // this frame will have one set below. Used by syncCommentsPosition().
+  for (const c of clusters) c._boxRect = null;
 
   ctx.font = FONT;
   ctx.textBaseline = "top";
@@ -1449,6 +1457,42 @@ function closeComments() {
   _commentsStoryId = null;
   commentsName.value = "";
   commentsText.value = "";
+}
+
+// Re-position the open comments panel under its story card every render
+// frame so the panel tracks the card as the user pans / zooms / drags.
+// Closes the panel if the card is no longer rendered (e.g. user zoomed
+// out below BOX_FADE_START or panned the card off-screen).
+function syncCommentsPosition() {
+  if (commentsEl.hidden || !_commentsStoryId) return;
+  let cluster = null;
+  for (const c of clusters) {
+    if (c.stories.some(s => s._id === _commentsStoryId)) { cluster = c; break; }
+  }
+  if (!cluster || !cluster._boxRect) {
+    closeComments();
+    return;
+  }
+  const cardR = cluster._boxRect;
+  const PANEL_MIN_W = 220;
+  const PANEL_MAX_W = 360;
+  const margin = 12;
+  const panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, cardR.w));
+  let x = cardR.x;
+  let y = cardR.y + cardR.h;
+  if (x + panelW > window.innerWidth - margin) x = window.innerWidth - panelW - margin;
+  if (x < margin) x = margin;
+  // If the panel doesn't fit below the card, flip above; if it doesn't
+  // fit above either, anchor to the bottom of the viewport.
+  const panelH = commentsEl.getBoundingClientRect().height;
+  if (y + panelH > window.innerHeight - margin) {
+    const above = cardR.y - panelH;
+    y = above >= margin ? above : window.innerHeight - panelH - margin;
+  }
+  if (y < margin) y = margin;
+  commentsEl.style.width = panelW + "px";
+  commentsEl.style.left = x + "px";
+  commentsEl.style.top  = y + "px";
 }
 
 commentsClose.addEventListener("click", closeComments);
