@@ -36,13 +36,15 @@ const INK_FAINT = "rgba(0,0,0,0.30)";   // (still used as faint accent)
 const MAP_GREY = "#c8c8c8";             // every line on the map
 const PAPER = "#fff";
 
-// Story box sizing. Cards appear at BOX_FADE_START at 1/3 of their natural
-// (content-driven) size, then grow linearly with zoom up to full natural
-// size at MAX_SCALE. Each card is square in screen pixels — its inner
-// dimensions are picked so the rendered box is roughly W = H.
+// Story box sizing. Cards appear at BOX_FADE_START at the smallest cell-grid
+// (BOX_MIN_INNER_COLS × BOX_MIN_INNER_ROWS) and grow toward each story's own
+// natural-max footprint at MAX_SCALE. Font size is fixed (FONT_SIZE) at every
+// zoom — only the cell COUNT grows, so Pretext re-breaks the prepared text at
+// each new width and more letters appear as the box widens.
 const BOX_PAD = 4;
 const BOX_FADE_START = 15;                      // cards appear only after ~15× zoom
-const BOX_START_SCALE = 1 / 3;                  // initial size relative to natural
+const BOX_MIN_INNER_COLS = 8;                   // smallest body width when card first appears
+const BOX_MIN_INNER_ROWS = 3;                   // smallest body height (header + rule + 1 body row)
 const MARKER_BOX_OFFSET_X = 22;
 const MARKER_BOX_OFFSET_Y = -22;
 // Uniform photo dimensions (in cells) across every card. Cell aspect 1:2
@@ -846,42 +848,40 @@ function buildStoryGrid(story, cluster, innerCols, innerRows, portraitOcc) {
     bodyHeight = (boxRows - 2) - bodyTopR + 1;
   }
 
-  // Body — letter-by-letter (grapheme-by-grapheme) reflow around the photo.
-  // No word tokenization: characters land in cells in order, breaking
-  // wherever the available run ends. This is the "letters following the
-  // contour" look as opposed to the chunky word-wrap.
-  if (bodyHeight > 0) {
-    const chars = graphemes((story.story || "").trim());
-    let ci = 0;
-
-    for (let br = 0; br < bodyHeight && ci < chars.length; br++) {
-      const occ = portraitOcc ? portraitOcc[br] : null;
-      const ranges = [];
-      if (!occ) {
-        ranges.push({ a: 0, b: innerCols - 1 });
-      } else {
-        if (occ.colStart > 0)             ranges.push({ a: 0,              b: occ.colStart - 2 });
-        if (occ.colEnd   < innerCols - 1) ranges.push({ a: occ.colEnd + 2, b: innerCols - 1 });
+  // Body — Pretext drives the line breaks. We feed walkLineRanges the
+  // CURRENT inner-width (in screen px) so as the box widens with zoom,
+  // Pretext re-walks the prepared text and longer / different lines emerge.
+  // Each materialized line is then rendered char-by-char into cells, with a
+  // jump past the photo silhouette for rows that overlap it.
+  if (bodyHeight > 0 && story.prepared) {
+    const innerWidthPx = innerCols * cellW;
+    const lines = [];
+    walkLineRanges(story.prepared, innerWidthPx, (lineRange) => {
+      if (lines.length < bodyHeight) {
+        lines.push(materializeLineRange(story.prepared, lineRange));
       }
-      for (const range of ranges) {
-        if (range.b < range.a) continue;
-        let col = range.a;
-        const colEnd = range.b;
-        let firstInRange = true;
-        while (col <= colEnd && ci < chars.length) {
-          const g = chars[ci];
-          // Eat leading whitespace at the start of a new line/range so wrapped
-          // text doesn't begin with a stranded space.
-          if (firstInRange && /^\s+$/.test(g)) { ci += 1; continue; }
-          firstInRange = false;
-          const w = chCells(g);
-          if (col + w - 1 > colEnd) break;
-          // Skip rendering whitespace cells (no glyph), but still consume them
-          // so the next range/row starts cleanly with content.
-          if (!/^\s+$/.test(g)) placeChar(grid, bodyTopR + br, 1 + col, g);
-          col += w;
-          ci += 1;
+    });
+
+    for (let br = 0; br < lines.length; br++) {
+      const occ = portraitOcc ? portraitOcc[br] : null;
+      const lineGraphemes = graphemes(lines[br].text);
+      let col = 0;
+      let inRight = false;
+      let firstChar = true;
+      for (const g of lineGraphemes) {
+        // Drop leading whitespace at the start of a wrapped line so text
+        // doesn't begin with a stranded space.
+        if (firstChar && /^\s+$/.test(g)) continue;
+        firstChar = false;
+        const w = chCells(g);
+        // If this char would land on the photo, jump past it once.
+        if (occ && !inRight && col + w - 1 >= occ.colStart) {
+          col = occ.colEnd + 1;
+          inRight = true;
         }
+        if (col + w - 1 > innerCols - 1) break;
+        if (!/^\s+$/.test(g)) placeChar(grid, bodyTopR + br, 1 + col, g);
+        col += w;
       }
     }
   }
@@ -954,46 +954,47 @@ function renderStories() {
     ensureStoryPrepared(story);
     hasPhotos = true;
 
-    // Card scale ramps from BOX_START_SCALE (1/3) at BOX_FADE_START up to
-    // 1.0 at MAX_SCALE. The natural cell layout is computed once per story;
-    // we just stretch it on screen via ctx transform.
+    // CURRENT cell-grid dimensions: lerp from a small uniform minimum at
+    // BOX_FADE_START to each story's per-content NATURAL max at MAX_SCALE.
+    // The font stays at FONT_SIZE (10px) at every zoom — only the cell COUNT
+    // grows, so Pretext re-breaks the prepared text at each new width and
+    // additional letters surface as the box widens.
+    const natural = computeBoxSize(story);
     const _t = clamp((s - BOX_FADE_START) / (MAX_SCALE - BOX_FADE_START), 0, 1);
-    const cardScale = BOX_START_SCALE + _t * (1 - BOX_START_SCALE);
+    let innerCols = Math.round(BOX_MIN_INNER_COLS + _t * (natural.innerCols - BOX_MIN_INNER_COLS));
+    let innerRows = Math.round(BOX_MIN_INNER_ROWS + _t * (natural.innerRows - BOX_MIN_INNER_ROWS));
+    if (innerCols % 2 === 1) innerCols += 1;          // keep boxCols even → boxRows = boxCols/2
+    innerCols = Math.min(innerCols, natural.innerCols);
+    innerRows = Math.max(1, Math.min(innerRows, natural.innerRows));
 
-    // Native cell-grid dimensions (content-driven, square in screen px).
-    const { innerCols, innerRows } = computeBoxSize(story);
     const boxCols = innerCols + 2;
     const boxRows = innerRows + 2;
-    const natW = boxCols * cellW;
-    const natH = boxRows * cellH;
-    const effW = natW * cardScale;
-    const effH = natH * cardScale;
+    const boxW = boxCols * cellW;
+    const boxH = boxRows * cellH;
 
-    // Effective screen-space top-left of the card (after scaling).
+    // Box top-left (screen px). Marker offset + drag offset.
     const dragSx = (cluster.dx || 0) * s;
     const dragSy = (cluster.dy || 0) * s;
     const boxLeft = mx + MARKER_BOX_OFFSET_X + dragSx;
-    const boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - effH;
+    const boxTop  = my + MARKER_BOX_OFFSET_Y + dragSy - boxH;
 
-    // Header takes 2 rows (header + rule). Photo, if present, lives in the
-    // body region centered with float drift. All math here is in NATIVE cell
-    // coords — we scale once at draw time.
-    const headerRows = 2;
-    const bodyTopRowI = 1 + headerRows;
-    const bodyTopY    = bodyTopRowI * cellH;
-    const bodyBotY    = (boxRows - 1) * cellH;
-    const innerLeftX  = cellW;            // inside the │
-    const innerW      = innerCols * cellW;
-    const innerBodyH  = bodyBotY - bodyTopY;
+    // Header rows (header + rule) only when there's room for a body too.
+    const hasBody    = innerRows >= 3;
+    const headerRows = hasBody ? 2 : 0;
+    const bodyTopY   = (1 + headerRows) * cellH;
+    const bodyBotY   = (boxRows - 1) * cellH;
+    const innerLeftX = cellW;
+    const innerW     = innerCols * cellW;
+    const innerBodyH = bodyBotY - bodyTopY;
 
+    // Photo: uniform 10×5 cells. Only renders once the card has the room.
     let photoOcc = null;
     let photoLeft = 0, photoTop = 0;
-    const photoSize  = PHOTO_CELLS_W * cellW;   // == PHOTO_CELLS_H * cellH (square)
-    const havePhoto  = !!story.photoImg
-                       && innerCols >= PHOTO_CELLS_W + 4
-                       && (innerRows - headerRows) >= PHOTO_CELLS_H + 1;
+    const photoSize = PHOTO_CELLS_W * cellW;        // === PHOTO_CELLS_H * cellH
+    const havePhoto = !!story.photoImg
+                      && innerCols >= PHOTO_CELLS_W + 4
+                      && (innerRows - headerRows) >= PHOTO_CELLS_H + 1;
     if (havePhoto) {
-      // Drift physics in native px (scale applied at render time).
       const f = story.float;
       const maxOx = (innerW - photoSize) / 2 - 4;
       const maxOy = (innerBodyH - photoSize) / 2 - 4;
@@ -1004,19 +1005,18 @@ function renderStories() {
       } else {
         f.ox = 0; f.oy = 0;
       }
-      photoLeft = innerLeftX + innerW / 2 + f.ox - photoSize / 2;
-      photoTop  = bodyTopY  + innerBodyH / 2 + f.oy - photoSize / 2;
+      photoLeft = boxLeft + innerLeftX + innerW / 2 + f.ox - photoSize / 2;
+      photoTop  = boxTop  + bodyTopY  + innerBodyH / 2 + f.oy - photoSize / 2;
 
-      // Cell occupancy from silhouette alpha bounds (native cells).
       if (story.photoBounds) {
         photoOcc = new Array(innerRows).fill(null);
         for (let br = headerRows; br < innerRows; br++) {
-          const rowY = bodyTopY + (br - headerRows) * cellH;
+          const rowY = boxTop + bodyTopY + (br - headerRows) * cellH;
           const r = getPhotoOccupiedRange(
             story.photoBounds, photoLeft, photoTop, photoSize, rowY, cellH);
           if (!r) continue;
-          const colStart = Math.max(0, Math.floor((r.pLeft  - innerLeftX) / cellW));
-          const colEnd   = Math.min(innerCols - 1, Math.ceil((r.pRight - innerLeftX) / cellW) - 1);
+          const colStart = Math.max(0, Math.floor((r.pLeft  - boxLeft - innerLeftX) / cellW));
+          const colEnd   = Math.min(innerCols - 1, Math.ceil((r.pRight - boxLeft - innerLeftX) / cellW) - 1);
           if (colEnd >= colStart) {
             photoOcc[br - headerRows] = { colStart, colEnd };
           }
@@ -1027,13 +1027,13 @@ function renderStories() {
     const { grid, arrowSpan } = buildStoryGrid(
       story, cluster, innerCols, innerRows, photoOcc);
 
-    // Knock out a white background sized to the EFFECTIVE rect.
+    // White knock-out so map lines underneath don't bleed through.
     ctx.fillStyle = PAPER;
-    ctx.fillRect(boxLeft - 1, boxTop - 1, effW + 2, effH + 2);
+    ctx.fillRect(boxLeft - 1, boxTop - 1, boxW + 2, boxH + 2);
 
-    // Leader line from marker to nearest point on the effective rect.
-    const lx = clamp(mx, boxLeft, boxLeft + effW);
-    const ly = clamp(my, boxTop, boxTop + effH);
+    // Leader line from marker to nearest box edge.
+    const lx = clamp(mx, boxLeft, boxLeft + boxW);
+    const ly = clamp(my, boxTop, boxTop + boxH);
     ctx.save();
     ctx.strokeStyle = INK;
     ctx.lineWidth = 0.8;
@@ -1043,48 +1043,43 @@ function renderStories() {
     ctx.stroke();
     ctx.restore();
 
-    // Render the grid + photo with a single scale transform. fillText etc.
-    // all happen at native cell coords; the transform projects to effective
-    // screen px so cards shrink/grow uniformly with zoom.
+    // Render the grid PER CELL at native (1:1) px — font stays at FONT_SIZE
+    // regardless of zoom. CJK glyphs reserve 2 cells via chCells/placeChar.
     ctx.save();
-    ctx.translate(boxLeft, boxTop);
-    ctx.scale(cardScale, cardScale);
-
     ctx.font = FONT;
     ctx.fillStyle = INK;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
     for (let r = 0; r < boxRows; r++) {
-      const yy = r * cellH;
+      const yy = boxTop + r * cellH;
       for (let c = 0; c < boxCols; c++) {
         const ch = grid[r][c];
         if (!ch || ch === " ") continue;
-        ctx.fillText(ch, c * cellW, yy);
+        ctx.fillText(ch, boxLeft + c * cellW, yy);
       }
     }
+    ctx.restore();
 
+    // Photo on top, clipped to the body region so drift never escapes.
     if (havePhoto) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(innerLeftX, bodyTopY, innerW, innerBodyH);
+      ctx.rect(boxLeft + innerLeftX, boxTop + bodyTopY, innerW, innerBodyH);
       ctx.clip();
       ctx.drawImage(story.photoImg, photoLeft, photoTop, photoSize, photoSize);
       ctx.restore();
     }
 
-    ctx.restore();
-
-    // Hit-test rects in screen-space (effective dimensions).
-    cluster._boxRect = { x: boxLeft, y: boxTop, w: effW, h: effH };
+    cluster._boxRect = { x: boxLeft, y: boxTop, w: boxW, h: boxH };
 
     if (arrowSpan) {
       clusterArrowHits.push({
         cluster,
         aabb: {
-          x: boxLeft + arrowSpan.col * cellW * cardScale,
-          y: boxTop + (boxRows - 1) * cellH * cardScale,
-          w: arrowSpan.len * cellW * cardScale,
-          h: cellH * cardScale,
+          x: boxLeft + arrowSpan.col * cellW,
+          y: boxTop + (boxRows - 1) * cellH,
+          w: arrowSpan.len * cellW,
+          h: cellH,
         },
       });
     }
