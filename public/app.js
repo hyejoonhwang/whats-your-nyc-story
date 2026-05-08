@@ -855,11 +855,6 @@ function renderStories() {
     ctx.font = `${markerSize}px ${FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    // Knock out a little white halo so the marker stays legible over street
-    // hatching at full zoom.
-    ctx.fillStyle = PAPER;
-    const halo = markerSize * 0.45;
-    ctx.fillRect(mx - halo, my - halo, halo * 2, halo * 2);
     ctx.fillStyle = INK;
     ctx.fillText(markerCh, mx, my);
     ctx.restore();
