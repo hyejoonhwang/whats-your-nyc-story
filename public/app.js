@@ -841,12 +841,18 @@ function renderStories() {
   // on dense maps but shouldn't overpower the box at high zoom.
   const markerSize = clamp(MARKER_FONT_BASE * Math.sqrt(s), MARKER_FONT_MIN, MARKER_FONT_MAX);
 
+  // Two-pass rendering so cards always sit ABOVE every marker (and every
+  // map line). Pass 1 lays down all markers; Pass 2 draws cards on top —
+  // their white knock-out covers any marker / line that would otherwise
+  // bleed through.
+  const cardJobs = [];
+
+  // ---- Pass 1: markers ----
   for (let ci = 0; ci < clusters.length; ci++) {
     const cluster = clusters[ci];
     if (cluster.wx < vbMinX || cluster.wx > vbMaxX) continue;
     if (cluster.wy < vbMinY || cluster.wy > vbMaxY) continue;
 
-    // Marker at cluster anchor (always rendered, every zoom level).
     const mx = view.tx + cluster.wx * s;
     const my = view.ty + cluster.wy * s;
     const markerCh = markerCharForCount(cluster.stories.length);
@@ -860,9 +866,14 @@ function renderStories() {
     ctx.restore();
 
     if (!boxVisible) continue;
-
     const story = cluster.stories[cluster.activeIdx] || cluster.stories[0];
     if (!story) continue;
+    cardJobs.push({ cluster, story, mx, my });
+  }
+
+  // ---- Pass 2: cards (always on top) ----
+  for (const job of cardJobs) {
+    const { cluster, story, mx, my } = job;
     ensureStoryPrepared(story);
     hasPhotos = true;
 
