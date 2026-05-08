@@ -1660,10 +1660,11 @@ writerSubmit.addEventListener("click", async () => {
     // on the map, then refresh after 5 s so the welcome panel returns and
     // /stories is freshly reloaded.
     if (postedWx != null && postedWy != null) {
-      const FOCUS_SCALE = 20;   // well past BOX_FADE_START → card is readable
-      view.scale = FOCUS_SCALE;
-      view.tx = window.innerWidth  / 2 - postedWx * FOCUS_SCALE;
-      view.ty = window.innerHeight / 2 - postedWy * FOCUS_SCALE;
+      // Slam to MAX_SCALE so the card is at its full natural size — photo
+      // visible, all text revealed.
+      view.scale = MAX_SCALE;
+      view.tx = window.innerWidth  / 2 - postedWx * MAX_SCALE;
+      view.ty = window.innerHeight / 2 - postedWy * MAX_SCALE;
       updateTier();
       render();
     }
